@@ -49,19 +49,20 @@ def package_executable():
         print("Run: pip install pyinstaller")
         sys.exit(1)
 
-    # Path to desktop launcher entry point
     launcher_script = str(PROJECT_ROOT / "desktop_launcher.py")
-
-    # Separator for PyInstaller --add-data on Windows is ';'
-    add_data_arg = f"{str(FRONTEND_DIST)};dist"
+    dist_data_arg = f"{str(FRONTEND_DIST)};dist"
+    backend_data_arg = f"{str(BACKEND_DIR)};backend"
 
     args = [
         launcher_script,
         "--name=EGX_Tracker",
         "--onefile",
         "--windowed",  # Suppress command prompt window
-        f"--add-data={add_data_arg}",
+        f"--add-data={dist_data_arg}",
+        f"--add-data={backend_data_arg}",
         f"--paths={str(BACKEND_DIR)}",
+        "--hidden-import=main",
+        "--hidden-import=uvicorn",
         "--hidden-import=uvicorn.logging",
         "--hidden-import=uvicorn.loops",
         "--hidden-import=uvicorn.loops.auto",
@@ -77,17 +78,20 @@ def package_executable():
         "--hidden-import=httpx",
         "--hidden-import=pydantic_settings",
         "--hidden-import=pytz",
-        "--hidden-import=webview",
         "--hidden-import=app",
         "--hidden-import=app.config",
         "--hidden-import=app.database",
         "--hidden-import=app.symbols",
         "--hidden-import=app.market_guard",
+        "--hidden-import=app.services",
         "--hidden-import=app.services.symbol_sync",
         "--hidden-import=app.services.stream_manager",
+        "--hidden-import=app.routers",
         "--hidden-import=app.routers.system",
         "--hidden-import=app.routers.symbols",
         "--hidden-import=app.routers.watchlist",
+        "--hidden-import=app.providers",
+        "--hidden-import=app.providers.base",
         "--hidden-import=app.providers.tradingview",
         "--hidden-import=app.providers.egxapi",
         "--hidden-import=app.providers.mock_snapshot",

@@ -4,7 +4,7 @@ Provides a 1-click desktop window interface for the EGX Watchlist Tracker:
 1. Spawns the FastAPI backend server (hosting React UI, SQLite & WebSockets) in a daemon thread.
 2. Waits until http://127.0.0.1:8000 is accepting connections.
 3. Opens a standalone desktop window using Microsoft Edge / Chrome in native App Mode
-   (`--app=http://127.0.0.1:8000` with an isolated profile), or pywebview fallback.
+   (`--app=http://127.0.0.1:8000` with an isolated profile), or system browser fallback.
 4. When the desktop window is closed, cleanly executes graceful shutdown
    and halts the process immediately, leaving zero background processes or port retention.
 """
@@ -18,21 +18,56 @@ import subprocess
 import urllib.request
 import webbrowser
 import multiprocessing
+import traceback
+import ctypes
 from pathlib import Path
 
 # Required for PyInstaller frozen executable on Windows
 multiprocessing.freeze_support()
 
-# Determine paths
+# Determine paths (supports both standard execution and PyInstaller frozen executable)
 if getattr(sys, "frozen", False):
-    PROJECT_ROOT = Path(sys.executable).resolve().parent
-    BACKEND_DIR = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
+    BASE_DIR = Path(sys.executable).resolve().parent
+    BACKEND_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))
 else:
-    PROJECT_ROOT = Path(__file__).resolve().parent
-    BACKEND_DIR = PROJECT_ROOT / "backend"
+    BASE_DIR = Path(__file__).resolve().parent
+    BACKEND_DIR = BASE_DIR / "backend"
 
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
+
+# Log file next to the launcher/executable
+LOG_FILE = BASE_DIR / "egx_launcher.log"
+
+
+def log_msg(msg: str):
+    """Appends status messages to egx_launcher.log for easy troubleshooting."""
+    try:
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] {msg}\n")
+    except Exception:
+        pass
+
+
+def show_alert(title: str, message: str):
+    """Displays a native Windows message box if a fatal error occurs."""
+    try:
+        ctypes.windll.user32.MessageBoxW(0, str(message), str(title), 0x10)
+    except Exception:
+        print(f"[{title}] {message}")
+
+
+# Top-level import forces PyInstaller AST analysis to collect all FastAPI & app modules
+try:
+    import uvicorn
+    from main import app
+except Exception as e:
+    err_str = traceback.format_exc()
+    log_msg(f"Failed to import backend modules: {err_str}")
+    show_alert("EGX Terminal Startup Error", f"Failed to load backend modules:\n\n{e}\n\nSee egx_launcher.log for details.")
+    sys.exit(1)
+
 
 APP_URL = "http://127.0.0.1:8000"
 global_server = None
@@ -42,9 +77,6 @@ def run_backend_server():
     """Starts Uvicorn serving FastAPI in a background daemon thread."""
     global global_server
     try:
-        import uvicorn
-        from main import app
-
         config = uvicorn.Config(
             app=app,
             host="127.0.0.1",
@@ -55,9 +87,11 @@ def run_backend_server():
         global_server = uvicorn.Server(config)
         # In a background thread, disable uvicorn's OS signal handlers to prevent ValueError
         global_server.install_signal_handlers = lambda: None
+        log_msg("Uvicorn server starting on 127.0.0.1:8000...")
         global_server.run()
     except Exception as e:
-        print(f"[BackendServer] Startup error: {e}")
+        err_str = traceback.format_exc()
+        log_msg(f"Uvicorn server crashed: {err_str}")
 
 
 def is_server_running(url: str) -> bool:
@@ -82,6 +116,7 @@ def wait_for_server(url: str, timeout: float = 12.0) -> bool:
 def request_graceful_shutdown():
     """Calls backend shutdown endpoint, stops uvicorn, and exits completely."""
     global global_server
+    log_msg("Graceful shutdown requested. Releasing port 8000 and closing connections...")
     try:
         req = urllib.request.Request(
             f"{APP_URL}/api/system/shutdown",
@@ -100,8 +135,8 @@ def request_graceful_shutdown():
         except Exception:
             pass
 
-    # Give sockets 300ms to finish closing then terminate process cleanly
     time.sleep(0.3)
+    log_msg("EGX Terminal closed cleanly. Process exiting.")
     os._exit(0)
 
 
@@ -112,10 +147,10 @@ def launch_browser_app_mode() -> bool:
     and does not instantly return if the user already has personal browser tabs open.
     """
     candidates = [
-        os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
-        os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
-        os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
-        os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
         os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
         os.path.expandvars(r"%LocalAppData%\Microsoft\Edge\Application\msedge.exe"),
     ]
@@ -139,40 +174,19 @@ def launch_browser_app_mode() -> bool:
             "--no-default-browser-check",
         ]
         try:
+            log_msg(f"Launching standalone window via: {browser_bin}")
             proc = subprocess.Popen(cmd)
-            proc.wait()  # Blocks until user closes the standalone window
+            proc.wait()  # Blocks until user closes the standalone window!
+            log_msg("Standalone window was closed by user.")
             return True
         except Exception as e:
-            print(f"Browser app mode launch error: {e}")
+            log_msg(f"Browser app mode launch error: {e}")
             return False
     return False
 
 
-def launch_pywebview() -> bool:
-    """Attempts to launch a desktop window using pywebview."""
-    try:
-        import webview
-        window = webview.create_window(
-            title="EGX Terminal — Egyptian Exchange Watchlist",
-            url=APP_URL,
-            width=1320,
-            height=860,
-            min_size=(960, 600),
-            background_color="#0a0d14",
-            text_select=True,
-        )
-        webview.start()
-        return True
-    except Exception as e:
-        print(f"pywebview note: {e}")
-        return False
-
-
 def main():
-    print("=" * 60)
-    print("  EGX TERMINAL — Real-Time Egyptian Exchange Watchlist")
-    print("  Starting local environment on http://127.0.0.1:8000...")
-    print("=" * 60)
+    log_msg("=== EGX Terminal Starting ===")
 
     # 1. Start backend server if not already running
     if not is_server_running(APP_URL):
@@ -180,29 +194,28 @@ def main():
         server_thread.start()
 
         if not wait_for_server(APP_URL):
-            print("Error: Backend server failed to start within timeout.")
+            msg = "Backend server failed to start within 12 seconds."
+            log_msg(f"Error: {msg}")
+            show_alert("EGX Terminal Error", f"{msg}\nCheck egx_launcher.log for details.")
             sys.exit(1)
 
-    print("Server ready! Launching native desktop window...")
+    log_msg("Server is responding at http://127.0.0.1:8000. Launching native window...")
 
-    # 2. Prefer standalone App Mode (Edge/Chrome native window with isolated profile)
+    # 2. Launch standalone App Mode (Edge/Chrome native window with isolated profile)
     opened = launch_browser_app_mode()
 
-    # 3. Fallback to pywebview if standalone browser app mode was unavailable
+    # 3. Fallback to default browser if standalone app mode was unavailable
     if not opened:
-        opened = launch_pywebview()
-
-    # 4. Fallback to default browser
-    if not opened:
+        log_msg("App mode unavailable, opening in default browser...")
         webbrowser.open(APP_URL)
-        print("Opened in default browser. Press CTRL+C in this terminal to exit.")
+        # Keep process alive while user uses browser
         try:
-            while True:
+            while is_server_running(APP_URL):
                 time.sleep(1)
         except KeyboardInterrupt:
             pass
 
-    # 5. Clean exit: stop server and kill process
+    # 4. Clean exit: stop server and kill process
     request_graceful_shutdown()
 
 
