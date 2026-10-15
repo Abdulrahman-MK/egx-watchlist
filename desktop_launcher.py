@@ -40,6 +40,41 @@ if str(BACKEND_DIR) not in sys.path:
 LOG_FILE = BASE_DIR / "egx_launcher.log"
 
 
+class SafeLogStream:
+    """Redirects stdout/stderr writes to the log file, preventing crashes in windowed mode."""
+    def __init__(self, log_path: Path):
+        self.log_path = log_path
+
+    def write(self, s: str):
+        if not s:
+            return
+        try:
+            with open(self.log_path, "a", encoding="utf-8") as f:
+                f.write(s)
+        except Exception:
+            pass
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+
+# In PyInstaller --windowed mode, sys.stdout, sys.stderr, and sys.stdin are None.
+# If unhandled, this crashes uvicorn's ColourizedFormatter (sys.stdout.isatty())
+# and standard print() calls across the backend.
+if sys.stdout is None:
+    sys.stdout = SafeLogStream(LOG_FILE)
+if sys.stderr is None:
+    sys.stderr = SafeLogStream(LOG_FILE)
+if sys.stdin is None:
+    class DummyStdin:
+        def read(self, *args, **kwargs): return ""
+        def readline(self, *args, **kwargs): return ""
+    sys.stdin = DummyStdin()
+
+
 def log_msg(msg: str):
     """Appends status messages to egx_launcher.log for easy troubleshooting."""
     try:
@@ -71,16 +106,18 @@ except Exception as e:
 
 APP_URL = "http://127.0.0.1:8000"
 global_server = None
+server_crash_error = None
 
 
 def run_backend_server():
     """Starts Uvicorn serving FastAPI in a background daemon thread."""
-    global global_server
+    global global_server, server_crash_error
     try:
         config = uvicorn.Config(
             app=app,
             host="127.0.0.1",
             port=8000,
+            log_config=None,  # Suppress default console formatter that queries sys.stdout.isatty
             log_level="warning",
             access_log=False,
         )
@@ -91,6 +128,7 @@ def run_backend_server():
         global_server.run()
     except Exception as e:
         err_str = traceback.format_exc()
+        server_crash_error = err_str
         log_msg(f"Uvicorn server crashed: {err_str}")
 
 
@@ -103,13 +141,15 @@ def is_server_running(url: str) -> bool:
         return False
 
 
-def wait_for_server(url: str, timeout: float = 12.0) -> bool:
+def wait_for_server(url: str, timeout: float = 25.0) -> bool:
     """Waits for local server to become ready."""
     start_time = time.time()
     while time.time() - start_time < timeout:
+        if server_crash_error:
+            return False
         if is_server_running(url):
             return True
-        time.sleep(0.25)
+        time.sleep(0.3)
     return False
 
 
@@ -194,9 +234,12 @@ def main():
         server_thread.start()
 
         if not wait_for_server(APP_URL):
-            msg = "Backend server failed to start within 12 seconds."
+            if server_crash_error:
+                msg = f"Backend server crashed on startup:\n\n{server_crash_error}"
+            else:
+                msg = "Backend server failed to start within timeout period."
             log_msg(f"Error: {msg}")
-            show_alert("EGX Terminal Error", f"{msg}\nCheck egx_launcher.log for details.")
+            show_alert("EGX Terminal Error", f"{msg}\n\nCheck egx_launcher.log for details.")
             sys.exit(1)
 
     log_msg("Server is responding at http://127.0.0.1:8000. Launching native window...")
