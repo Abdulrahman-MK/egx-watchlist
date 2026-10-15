@@ -3,15 +3,16 @@
 Provides a 1-click desktop window interface for the EGX Watchlist Tracker:
 1. Spawns the FastAPI backend server (hosting React UI, SQLite & WebSockets) in a daemon thread.
 2. Waits until http://127.0.0.1:8000 is accepting connections.
-3. Opens a native application window using pywebview, with an automatic fallback
-   to Microsoft Edge / Google Chrome in standalone App Mode (`--app=http://127.0.0.1:8000`).
-4. When the desktop window is closed, cleanly requests `/api/system/shutdown`
+3. Opens a standalone desktop window using Microsoft Edge / Chrome in native App Mode
+   (`--app=http://127.0.0.1:8000` with an isolated profile), or pywebview fallback.
+4. When the desktop window is closed, cleanly executes graceful shutdown
    and halts the process immediately, leaving zero background processes or port retention.
 """
 
 import os
 import sys
 import time
+import tempfile
 import threading
 import subprocess
 import urllib.request
@@ -105,13 +106,18 @@ def request_graceful_shutdown():
 
 
 def launch_browser_app_mode() -> bool:
-    """Fallback: Launches Microsoft Edge or Chrome in standalone native app mode."""
+    """Launches Microsoft Edge or Chrome in standalone native app mode.
+
+    Using a dedicated --user-data-dir ensures it runs as an independent window process
+    and does not instantly return if the user already has personal browser tabs open.
+    """
     candidates = [
         os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
         os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
         os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
         os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
         os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%LocalAppData%\Microsoft\Edge\Application\msedge.exe"),
     ]
 
     browser_bin = None
@@ -121,16 +127,45 @@ def launch_browser_app_mode() -> bool:
             break
 
     if browser_bin:
+        profile_dir = os.path.join(tempfile.gettempdir(), "egx_tracker_profile")
         cmd = [
             browser_bin,
             f"--app={APP_URL}",
+            f"--user-data-dir={profile_dir}",
             "--window-size=1320,860",
             "--window-position=100,50",
+            "--disable-extensions",
+            "--no-first-run",
+            "--no-default-browser-check",
         ]
-        proc = subprocess.Popen(cmd)
-        proc.wait()  # Blocks until user closes the standalone window
-        return True
+        try:
+            proc = subprocess.Popen(cmd)
+            proc.wait()  # Blocks until user closes the standalone window
+            return True
+        except Exception as e:
+            print(f"Browser app mode launch error: {e}")
+            return False
     return False
+
+
+def launch_pywebview() -> bool:
+    """Attempts to launch a desktop window using pywebview."""
+    try:
+        import webview
+        window = webview.create_window(
+            title="EGX Terminal — Egyptian Exchange Watchlist",
+            url=APP_URL,
+            width=1320,
+            height=860,
+            min_size=(960, 600),
+            background_color="#0a0d14",
+            text_select=True,
+        )
+        webview.start()
+        return True
+    except Exception as e:
+        print(f"pywebview note: {e}")
+        return False
 
 
 def main():
@@ -150,38 +185,24 @@ def main():
 
     print("Server ready! Launching native desktop window...")
 
-    # 2. Launch native desktop UI via pywebview, falling back to browser app mode
-    window_opened = False
-    try:
-        import webview
-        window = webview.create_window(
-            title="EGX Terminal — Egyptian Exchange Watchlist",
-            url=APP_URL,
-            width=1320,
-            height=860,
-            min_size=(960, 600),
-            background_color="#0a0d14",
-            text_select=True,
-        )
-        window.events.closed += request_graceful_shutdown
-        webview.start()
-        window_opened = True
-    except Exception as e:
-        print(f"pywebview note: {e}. Falling back to app mode window...")
+    # 2. Prefer standalone App Mode (Edge/Chrome native window with isolated profile)
+    opened = launch_browser_app_mode()
 
-    if not window_opened:
-        app_opened = launch_browser_app_mode()
-        if not app_opened:
-            # Last fallback: open in default browser
-            webbrowser.open(APP_URL)
-            print("Opened in default browser. Press CTRL+C in this terminal to exit.")
-            try:
-                while True:
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                pass
+    # 3. Fallback to pywebview if standalone browser app mode was unavailable
+    if not opened:
+        opened = launch_pywebview()
 
-    # 3. Clean exit: stop server and kill process
+    # 4. Fallback to default browser
+    if not opened:
+        webbrowser.open(APP_URL)
+        print("Opened in default browser. Press CTRL+C in this terminal to exit.")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+
+    # 5. Clean exit: stop server and kill process
     request_graceful_shutdown()
 
 
