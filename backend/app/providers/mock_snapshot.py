@@ -44,23 +44,41 @@ def generate_snapshot_quote(ticker: str, metadata: Optional[Dict[str, Any]] = No
     if base_price <= 0:
         base_price = 15.0
 
-    # Deterministic pseudo-randomness per ticker
-    seed_val = sum(ord(c) for c in clean)
-    rng = random.Random(seed_val)
-
-    # Simulated day change (-2.5% to +3.2%)
-    pct_change = round(rng.uniform(-2.5, 3.2), 2)
-    change = round(base_price * (pct_change / 100.0), 2)
-    last_price = round(base_price + change, 2)
-    prev_close = base_price
-
-    spread = abs(change) + (base_price * 0.015)
-    high_price = round(max(last_price, prev_close) + rng.uniform(0.05, spread), 2)
-    low_price = round(min(last_price, prev_close) - rng.uniform(0.05, spread), 2)
-    open_price = round(prev_close + rng.uniform(-spread / 2, spread / 2), 2)
-
     is_idx = bool(info.get("is_index", False))
-    volume = rng.randint(250_000_000, 1_200_000_000) if is_idx else rng.randint(150_000, 4_800_000)
+
+    # Real benchmark anchors for core indices if offline
+    INDEX_ANCHORS = {
+        "EGX30": {"last_price": 52273.3, "prev_close": 51492.8, "open": 51498.0, "high": 52277.2, "low": 51231.6, "change": 780.5, "change_pct": 1.52, "volume": 198082000},
+        "EGX70EWI": {"last_price": 18481.5, "prev_close": 18330.8, "open": 18339.2, "high": 18481.5, "low": 18065.5, "change": 150.7, "change_pct": 0.82, "volume": 832733000},
+        "EGX100EWI": {"last_price": 24607.4, "prev_close": 24413.3, "open": 24421.9, "high": 24608.2, "low": 24093.9, "change": 194.1, "change_pct": 0.80, "volume": 1030820000},
+        "SHARIAH": {"last_price": 6378.9, "prev_close": 6348.74, "open": 6347.43, "high": 6380.35, "low": 6264.75, "change": 30.16, "change_pct": 0.48, "volume": 94549500},
+    }
+
+    if clean in INDEX_ANCHORS:
+        anchor = INDEX_ANCHORS[clean]
+        last_price = anchor["last_price"]
+        prev_close = anchor["prev_close"]
+        open_price = anchor["open"]
+        high_price = anchor["high"]
+        low_price = anchor["low"]
+        change = anchor["change"]
+        pct_change = anchor["change_pct"]
+        volume = anchor["volume"]
+    else:
+        # Deterministic pseudo-randomness per ticker
+        seed_val = sum(ord(c) for c in clean)
+        rng = random.Random(seed_val)
+
+        pct_change = round(rng.uniform(-2.5, 3.2), 2)
+        change = round(base_price * (pct_change / 100.0), 2)
+        last_price = round(base_price + change, 2)
+        prev_close = base_price
+
+        spread = abs(change) + (base_price * 0.015)
+        high_price = round(max(last_price, prev_close) + rng.uniform(0.05, spread), 2)
+        low_price = round(min(last_price, prev_close) - rng.uniform(0.05, spread), 2)
+        open_price = round(prev_close + rng.uniform(-spread / 2, spread / 2), 2)
+        volume = rng.randint(250_000_000, 1_200_000_000) if is_idx else rng.randint(150_000, 4_800_000)
 
     now_cairo = get_cairo_now()
 

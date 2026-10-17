@@ -6,7 +6,7 @@ This module houses definitions for:
 - Default watchlist presets for initial database bootstrap.
 
 EGX Market Quirks Handled:
-- TradingView symbol for EGX 33 Shariah Index is 'EGX:EGX33SHR'.
+- TradingView symbol for EGX 33 Shariah Index is 'EGX:SHARIAH'.
 - Dual English and Arabic corporate nomenclatures are maintained for high-clarity search.
 """
 
@@ -20,7 +20,7 @@ INDICES: Dict[str, Dict[str, Any]] = {
         "name_en": "EGX 30 Index",
         "name_ar": "مؤشر إيجي إكس 30",
         "is_index": True,
-        "base_price": 31250.40,
+        "base_price": 52273.30,
         "currency": "EGP",
         "sector": "Benchmark Index",
         "sector_ar": "المؤشر الرئيسي",
@@ -31,7 +31,7 @@ INDICES: Dict[str, Dict[str, Any]] = {
         "name_en": "EGX 70 EWI",
         "name_ar": "مؤشر إيجي إكس 70 متساوي الأوزان",
         "is_index": True,
-        "base_price": 7450.85,
+        "base_price": 18481.50,
         "currency": "EGP",
         "sector": "Small & Mid Cap Index",
         "sector_ar": "مؤشر الشركات المتوسطة والصغيرة",
@@ -42,18 +42,18 @@ INDICES: Dict[str, Dict[str, Any]] = {
         "name_en": "EGX 100 EWI",
         "name_ar": "مؤشر إيجي إكس 100 متساوي الأوزان",
         "is_index": True,
-        "base_price": 10680.12,
+        "base_price": 24607.40,
         "currency": "EGP",
         "sector": "Broad Market Index",
         "sector_ar": "المؤشر الأوسع نطاقاً",
     },
     "SHARIAH": {
         "ticker": "SHARIAH",
-        "tv_symbol": "EGX:EGX33SHR",
+        "tv_symbol": "EGX:SHARIAH",
         "name_en": "EGX 33 Shariah Index",
         "name_ar": "مؤشر الشريعة إيجي إكس 33",
         "is_index": True,
-        "base_price": 3280.60,
+        "base_price": 6378.90,
         "currency": "EGP",
         "sector": "Shariah Compliant Index",
         "sector_ar": "مؤشر الشريعة الإسلامية",

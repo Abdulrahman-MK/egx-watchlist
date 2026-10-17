@@ -131,3 +131,17 @@ async def get_snapshot():
         "watchlist": watchlist_data,
         "raw": snapshots,
     }
+
+
+@router.get("/history/{symbol}")
+async def get_history(symbol: str, limit: int = 100):
+    """Retrieves chronological price history data points for sparklines and ML prediction modeling."""
+    from app.database import get_ticker_history_from_db
+    sym = normalize_ticker(symbol)
+    rows = await get_ticker_history_from_db(sym, limit=limit)
+    return {
+        "ticker": sym,
+        "count": len(rows),
+        "history": rows,
+    }
+

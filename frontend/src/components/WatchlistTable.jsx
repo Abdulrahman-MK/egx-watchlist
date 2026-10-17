@@ -32,6 +32,7 @@ export function WatchlistTable({
         sector: q.sector || '—',
         sector_ar: q.sector_ar || '',
         last_price: q.last_price !== undefined ? q.last_price : null,
+        open: q.open !== undefined ? q.open : (q.prev_close || null),
         change: q.change !== undefined ? q.change : null,
         change_pct: q.change_pct !== undefined ? q.change_pct : null,
         high: q.high !== undefined ? q.high : null,
@@ -159,6 +160,13 @@ export function WatchlistTable({
                 </div>
               </th>
 
+              <th className="py-3 px-3 text-right group cursor-pointer hidden md:table-cell" onClick={() => handleSort('open')}>
+                <div className="flex items-center justify-end gap-1.5">
+                  <span>Open</span>
+                  {renderSortIcon('open')}
+                </div>
+              </th>
+
               <th className="py-3 px-3 text-right group cursor-pointer hidden md:table-cell" onClick={() => handleSort('high')}>
                 <div className="flex items-center justify-end gap-1.5">
                   <span>High</span>
@@ -178,6 +186,10 @@ export function WatchlistTable({
                   <span>Volume</span>
                   {renderSortIcon('volume')}
                 </div>
+              </th>
+
+              <th className="py-3 px-3 text-center hidden xl:table-cell font-mono">
+                <span>Session (Start → End)</span>
               </th>
 
               <th className="py-3 px-3 text-right hidden lg:table-cell font-mono">
@@ -284,6 +296,11 @@ export function WatchlistTable({
                       </span>
                     </td>
 
+                    {/* Open (Starting Point) */}
+                    <td className="py-3 px-3 text-right text-slate-300 font-tabular hidden md:table-cell">
+                      {formatPrice(row.open)}
+                    </td>
+
                     {/* High */}
                     <td className="py-3 px-3 text-right text-slate-300 font-tabular hidden md:table-cell">
                       {formatPrice(row.high)}
@@ -297,6 +314,26 @@ export function WatchlistTable({
                     {/* Volume */}
                     <td className="py-3 px-3 text-right text-slate-400 font-tabular hidden sm:table-cell">
                       {formatVolume(row.volume)}
+                    </td>
+
+                    {/* Session Trajectory (Start -> End) */}
+                    <td className="py-3 px-3 text-center hidden xl:table-cell font-mono">
+                      {row.open && row.last_price ? (
+                        <div className="w-28 mx-auto flex flex-col gap-1">
+                          <div className="flex items-center justify-between text-[10px] text-slate-400">
+                            <span>S: {formatPrice(row.open)}</span>
+                            <span>E: {formatPrice(row.last_price)}</span>
+                          </div>
+                          <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full ${isPositive ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                              style={{ width: `${Math.min(100, Math.max(8, ((row.last_price - (row.low || row.last_price)) / ((row.high || row.last_price) - (row.low || row.last_price) || 1)) * 100))}%` }}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-slate-600">—</span>
+                      )}
                     </td>
 
                     {/* Last Updated */}

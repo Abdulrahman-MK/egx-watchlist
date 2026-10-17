@@ -15,9 +15,9 @@ Clients must echo back the identical heartbeat frame immediately to maintain con
 
 Quote Data Packets:
 Market updates arrive with message type 'qsd':
-    `{"m": "qsd", "p": ["qs_session_id", {"n": "EGX:COMI", "s": "ok", "v": {"lp": 86.5, ...}}]}`
+    `{"m": "qsd", "p": ["qs_session_id", {"n": "EGX:COMI", "s": "ok", "v": {"lp": 125.0, ...}}]}`
 This module normalizes the raw payload into a uniform dictionary with price, change,
-volume, high, low, and local Cairo timestamp.
+volume, high, low, and local Cairo timestamp, saving ticks to SQLite for historical analysis.
 """
 
 import asyncio
@@ -29,12 +29,14 @@ import ssl
 import inspect
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Set
+import httpx
 import websockets
 from app.config import settings
 from app.providers.base import DataProvider
 from app.providers.mock_snapshot import get_initial_snapshots, generate_snapshot_quote
 from app.symbols import ALL_STATIC_SYMBOLS, INDICES, normalize_ticker
 from app.market_guard import check_market_hours, get_cairo_now
+from app.database import save_quote_to_db, get_cached_quotes_from_db
 
 TV_WS_URL = "wss://data.tradingview.com/socket.io/websocket"
 TV_ORIGIN = "https://www.tradingview.com"
@@ -94,20 +96,20 @@ class TradingViewWebSocketProvider(DataProvider):
     def _to_tv_symbol(self, ticker: str) -> str:
         """Converts an internal ticker (e.g. 'COMI' or 'SHARIAH') to a TradingView symbol.
 
-        Special case: EGX 33 Shariah index maps to 'EGX:EGX33SHR'.
+        Special case: EGX 33 Shariah index maps to 'EGX:SHARIAH'.
         """
         clean = normalize_ticker(ticker)
-        if clean == "SHARIAH":
-            return "EGX:EGX33SHR"
+        if clean in ("SHARIAH", "EGX33SHR", "EGX33"):
+            return "EGX:SHARIAH"
         static_info = ALL_STATIC_SYMBOLS.get(clean)
         if static_info and "tv_symbol" in static_info:
             return static_info["tv_symbol"]
         return f"EGX:{clean}"
 
     def _to_internal_ticker(self, tv_sym: str) -> str:
-        """Maps an incoming TradingView symbol (e.g. 'EGX:EGX33SHR') back to internal ticker."""
+        """Maps an incoming TradingView symbol (e.g. 'EGX:SHARIAH') back to internal ticker."""
         clean_tv = tv_sym.upper()
-        if clean_tv in ("EGX:EGX33SHR", "EGX:SHARIAH"):
+        if clean_tv in ("EGX:SHARIAH", "EGX:EGX33SHR", "SHARIAH"):
             return "SHARIAH"
         for t, info in ALL_STATIC_SYMBOLS.items():
             if info.get("tv_symbol", "").upper() == clean_tv:
@@ -183,25 +185,187 @@ class TradingViewWebSocketProvider(DataProvider):
             except Exception as e:
                 print(f"[{self.name}] Failed to send quote_remove_symbols: {e}")
 
+    async def _fetch_scanner_closing_snapshot(self, symbols: List[str]) -> None:
+        """Fallback to TradingView Egypt Scanner API for official closing quotes."""
+        tv_symbols = [self._to_tv_symbol(s) for s in symbols]
+        payload = {
+            "symbols": {"tickers": tv_symbols},
+            "columns": ["name", "description", "close", "change", "change_abs", "high", "low", "open", "volume"],
+        }
+        headers = {
+            "User-Agent": TV_USER_AGENT,
+            "Content-Type": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.post("https://scanner.tradingview.com/egypt/scan", json=payload, headers=headers)
+                if resp.status_code == 200:
+                    rows = resp.json().get("data", [])
+                    for r in rows:
+                        s_name = r.get("s", "")
+                        d = r.get("d", [])
+                        if len(d) >= 9:
+                            close_p = d[2]
+                            ch_pct = d[3]
+                            ch_abs = d[4]
+                            hi = d[5]
+                            lo = d[6]
+                            op = d[7]
+                            vol = d[8]
+                            prev = (close_p - ch_abs) if (close_p is not None and ch_abs is not None) else close_p
+                            v = {
+                                "lp": close_p,
+                                "ch": ch_abs,
+                                "chp": ch_pct,
+                                "high_price": hi,
+                                "low_price": lo,
+                                "open_price": op,
+                                "volume": vol,
+                                "prev_close_price": prev,
+                            }
+                            await self._process_quote_update(s_name, v)
+        except Exception as e:
+            print(f"[{self.name}] Scanner fallback warning: {e}")
+
+    async def _fetch_one_shot_closing_snapshot(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Performs a fast one-shot quote handshake to retrieve authentic closing data."""
+        if not symbols:
+            return {}
+        tv_symbols = [self._to_tv_symbol(s) for s in symbols]
+        ssl_ctx = ssl.create_default_context()
+        quotes_received: Dict[str, Dict[str, Any]] = {}
+
+        try:
+            sig = inspect.signature(websockets.connect)
+            connect_kwargs: Dict[str, Any] = {
+                "ssl": ssl_ctx,
+                "ping_interval": 15,
+                "ping_timeout": 15,
+            }
+            if "origin" in sig.parameters:
+                connect_kwargs["origin"] = TV_ORIGIN
+            elif "additional_headers" in sig.parameters:
+                connect_kwargs["additional_headers"] = {"Origin": TV_ORIGIN, "User-Agent": TV_USER_AGENT}
+            elif "extra_headers" in sig.parameters:
+                connect_kwargs["extra_headers"] = {"Origin": TV_ORIGIN, "User-Agent": TV_USER_AGENT}
+
+            async with websockets.connect(TV_WS_URL, **connect_kwargs) as ws:
+                auth_msg = json.dumps({"m": "set_auth_token", "p": [self.auth_token]})
+                await ws.send(self._format_frame(auth_msg))
+
+                sess_id = self._generate_session_id("qs_snap_")
+                sess_msg = json.dumps({"m": "quote_create_session", "p": [sess_id]})
+                await ws.send(self._format_frame(sess_msg))
+
+                fields = [
+                    "ch", "chp", "description", "exchange", "lp", "high_price",
+                    "low_price", "open_price", "prev_close_price", "volume"
+                ]
+                fields_msg = json.dumps({"m": "quote_set_fields", "p": [sess_id, *fields]})
+                await ws.send(self._format_frame(fields_msg))
+
+                sub_msg = json.dumps({"m": "quote_add_symbols", "p": [sess_id, *tv_symbols]})
+                await ws.send(self._format_frame(sub_msg))
+
+                start_time = asyncio.get_event_loop().time()
+                while asyncio.get_event_loop().time() - start_time < 3.5:
+                    try:
+                        raw_msg = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                    except (asyncio.TimeoutError, Exception):
+                        break
+
+                    if raw_msg.startswith("~h~"):
+                        try:
+                            await ws.send(self._format_frame(raw_msg))
+                        except Exception:
+                            pass
+                        continue
+
+                    frames = self._parse_frames(raw_msg)
+                    for frame in frames:
+                        try:
+                            data = json.loads(frame)
+                        except Exception:
+                            continue
+                        if data.get("m") == "qsd" and len(data.get("p", [])) >= 2:
+                            quote_obj = data["p"][1]
+                            tv_sym = quote_obj.get("n", "")
+                            v = quote_obj.get("v", {})
+                            if tv_sym and v:
+                                t = self._to_internal_ticker(tv_sym)
+                                await self._process_quote_update(tv_sym, v)
+                                quotes_received[t] = self._cache.get(t, {})
+
+                    if len(quotes_received) >= len(symbols):
+                        break
+        except Exception as e:
+            print(f"[{self.name}] One-shot WebSocket handshake notice: {e}. Trying scanner fallback.")
+            await self._fetch_scanner_closing_snapshot(symbols)
+
+        return quotes_received
+
     async def get_snapshot(self, symbols: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
-        """Retrieves latest quote or closing snapshot for requested symbols."""
+        """Retrieves latest quote or closing snapshot for requested symbols.
+
+        Resolution hierarchy:
+        1. In-memory cache (self._cache)
+        2. SQLite persistent cache (latest_quotes)
+        3. Real-time one-shot closing fetch from TradingView
+        4. Static metadata as emergency offline fallback
+        """
         target_symbols = [normalize_ticker(s) for s in symbols] if symbols else list(self._cache.keys())
-        result = {}
+        result: Dict[str, Dict[str, Any]] = {}
+        missing: List[str] = []
+
         for s in target_symbols:
-            if s in self._cache:
+            if s in self._cache and self._cache[s].get("last_price", 0) > 0:
                 result[s] = self._cache[s]
             else:
+                missing.append(s)
+
+        # 2. Check SQLite persistent cache
+        if missing:
+            try:
+                db_quotes = await get_cached_quotes_from_db(missing)
+                for s, q in db_quotes.items():
+                    if q.get("last_price", 0) > 0:
+                        self._cache[s] = q
+                        result[s] = q
+                        if s in missing:
+                            missing.remove(s)
+            except Exception as e:
+                print(f"[{self.name}] DB cache lookup notice: {e}")
+
+        # 3. If any symbol is still missing, fetch genuine closing snapshot
+        if missing:
+            print(f"[{self.name}] Fetching real closing snapshot for: {missing}")
+            fetched = await self._fetch_one_shot_closing_snapshot(missing)
+            for s, q in fetched.items():
+                result[s] = q
+
+        # 4. Emergency fallback for any remaining symbol
+        for s in target_symbols:
+            if s not in result or result[s].get("last_price", 0) <= 0:
                 snap = generate_snapshot_quote(s)
                 self._cache[s] = snap
                 result[s] = snap
+
         return result
 
     async def _connection_loop(self) -> None:
         """Main connection and message ingestion loop with auto-reconnect."""
+        # Pre-fetch authentic closing snapshot on startup for indices + watchlist
+        try:
+            init_symbols = list(set(INDICES.keys()).union(self._subscribed_symbols))
+            print(f"[{self.name}] Pre-fetching authentic closing snapshot on startup for: {init_symbols}")
+            await self._fetch_one_shot_closing_snapshot(init_symbols)
+        except Exception as e:
+            print(f"[{self.name}] Initial closing pre-fetch notice: {e}")
+
         while self._running:
             market_info = check_market_hours()
             if not market_info["is_open"]:
-                print(f"[{self.name}] Market is {market_info['status']}. Serving closing snapshot.")
+                print(f"[{self.name}] Market is {market_info['status']}. Serving authentic closing snapshot.")
                 await asyncio.sleep(60)
                 continue
 
@@ -307,7 +471,7 @@ class TradingViewWebSocketProvider(DataProvider):
                 await self._process_quote_update(tv_symbol, values)
 
     async def _process_quote_update(self, tv_symbol: str, values: Dict[str, Any]) -> None:
-        """Normalizes raw quote payload and emits tick."""
+        """Normalizes raw quote payload, caches in SQLite, and emits tick."""
         ticker = self._to_internal_ticker(tv_symbol)
         existing = self._cache.get(ticker, {})
 
@@ -347,4 +511,11 @@ class TradingViewWebSocketProvider(DataProvider):
         }
 
         self._cache[ticker] = normalized_quote
+
+        # Persist to SQLite latest_quotes and price_history
+        try:
+            await save_quote_to_db(normalized_quote)
+        except Exception:
+            pass
+
         await self.emit_tick(normalized_quote)

@@ -60,6 +60,49 @@ async def init_db() -> None:
             )
         """)
 
+        # 3. Persistent latest authentic quotes table
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS latest_quotes (
+                ticker TEXT PRIMARY KEY,
+                tv_symbol TEXT NOT NULL,
+                name_en TEXT NOT NULL,
+                name_ar TEXT DEFAULT '',
+                is_index INTEGER DEFAULT 0,
+                sector TEXT DEFAULT 'General',
+                sector_ar TEXT DEFAULT 'عام',
+                currency TEXT DEFAULT 'EGP',
+                last_price REAL NOT NULL,
+                prev_close REAL NOT NULL,
+                open_price REAL NOT NULL,
+                high_price REAL NOT NULL,
+                low_price REAL NOT NULL,
+                change REAL NOT NULL,
+                change_pct REAL NOT NULL,
+                volume INTEGER DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                session_date TEXT NOT NULL
+            )
+        """)
+
+        # 4. Historical time-series table for session sparklines, prediction models, and analytics
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS price_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                session_date TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                price REAL NOT NULL,
+                open_price REAL,
+                high_price REAL,
+                low_price REAL,
+                volume INTEGER,
+                change REAL,
+                change_pct REAL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_hist_ticker_date ON price_history(ticker, session_date)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_hist_ticker_ts ON price_history(ticker, timestamp)")
+
         await db.commit()
 
         # Seed initial watchlist if empty
@@ -326,3 +369,147 @@ async def remove_symbol_from_watchlist(symbol: str) -> bool:
         cursor = await db.execute("DELETE FROM watchlist WHERE symbol = ?", (clean,))
         await db.commit()
         return cursor.rowcount > 0
+
+
+async def save_quote_to_db(quote: Dict[str, Any]) -> None:
+    """Saves latest quote to SQLite and appends an intraday point to price_history."""
+    ticker = normalize_ticker(quote.get("ticker", ""))
+    if not ticker:
+        return
+    tv_sym = quote.get("tv_symbol", f"EGX:{ticker}")
+    name_en = quote.get("name_en", ticker)
+    name_ar = quote.get("name_ar", "")
+    is_index = 1 if quote.get("is_index") else 0
+    sector = quote.get("sector", "General")
+    sector_ar = quote.get("sector_ar", "عام")
+    currency = quote.get("currency", "EGP")
+    last_price = float(quote.get("last_price", 0.0))
+    prev_close = float(quote.get("prev_close", last_price))
+    open_price = float(quote.get("open", prev_close))
+    high_price = float(quote.get("high", max(last_price, open_price)))
+    low_price = float(quote.get("low", min(last_price, open_price)))
+    change = float(quote.get("change", 0.0))
+    change_pct = float(quote.get("change_pct", 0.0))
+    volume = int(quote.get("volume", 0))
+    updated_at = quote.get("updated_at", "")
+    session_date = updated_at[:10] if len(updated_at) >= 10 else ""
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO latest_quotes (
+                ticker, tv_symbol, name_en, name_ar, is_index, sector, sector_ar,
+                currency, last_price, prev_close, open_price, high_price, low_price,
+                change, change_pct, volume, updated_at, session_date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(ticker) DO UPDATE SET
+                tv_symbol = excluded.tv_symbol,
+                name_en = excluded.name_en,
+                name_ar = CASE WHEN latest_quotes.name_ar != '' THEN latest_quotes.name_ar ELSE excluded.name_ar END,
+                is_index = excluded.is_index,
+                last_price = excluded.last_price,
+                prev_close = excluded.prev_close,
+                open_price = excluded.open_price,
+                high_price = excluded.high_price,
+                low_price = excluded.low_price,
+                change = excluded.change,
+                change_pct = excluded.change_pct,
+                volume = excluded.volume,
+                updated_at = excluded.updated_at,
+                session_date = excluded.session_date
+            """,
+            (
+                ticker, tv_sym, name_en, name_ar, is_index, sector, sector_ar,
+                currency, last_price, prev_close, open_price, high_price, low_price,
+                change, change_pct, volume, updated_at, session_date
+            ),
+        )
+
+        # Append to price_history if no identical price record exists for this minute
+        minute_prefix = updated_at[:16] if len(updated_at) >= 16 else updated_at
+        async with db.execute(
+            "SELECT id FROM price_history WHERE ticker = ? AND timestamp LIKE ? AND price = ?",
+            (ticker, f"{minute_prefix}%", last_price),
+        ) as cursor:
+            existing = await cursor.fetchone()
+
+        if not existing:
+            await db.execute(
+                """
+                INSERT INTO price_history (
+                    ticker, session_date, timestamp, price, open_price,
+                    high_price, low_price, volume, change, change_pct
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    ticker, session_date, updated_at, last_price, open_price,
+                    high_price, low_price, volume, change, change_pct
+                ),
+            )
+
+        await db.commit()
+
+
+async def save_quotes_bulk_to_db(quotes: List[Dict[str, Any]]) -> None:
+    """Saves multiple quotes to SQLite."""
+    for q in quotes:
+        await save_quote_to_db(q)
+
+
+async def get_cached_quotes_from_db(tickers: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
+    """Retrieves cached latest authentic quotes from SQLite."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if tickers:
+            clean_list = [normalize_ticker(t) for t in tickers]
+            placeholders = ",".join("?" for _ in clean_list)
+            query = f"SELECT * FROM latest_quotes WHERE ticker IN ({placeholders})"
+            params = clean_list
+        else:
+            query = "SELECT * FROM latest_quotes"
+            params = []
+
+        result = {}
+        async with db.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+            for r in rows:
+                d = dict(r)
+                result[d["ticker"]] = {
+                    "ticker": d["ticker"],
+                    "tv_symbol": d["tv_symbol"],
+                    "name_en": d["name_en"],
+                    "name_ar": d["name_ar"],
+                    "is_index": bool(d["is_index"]),
+                    "sector": d["sector"],
+                    "sector_ar": d["sector_ar"],
+                    "currency": d["currency"],
+                    "last_price": d["last_price"],
+                    "prev_close": d["prev_close"],
+                    "open": d["open_price"],
+                    "high": d["high_price"],
+                    "low": d["low_price"],
+                    "change": d["change"],
+                    "change_pct": d["change_pct"],
+                    "volume": d["volume"],
+                    "updated_at": d["updated_at"],
+                }
+        return result
+
+
+async def get_ticker_history_from_db(ticker: str, limit: int = 100) -> List[Dict[str, Any]]:
+    """Fetches chronological time-series price points for a ticker from SQLite."""
+    clean = normalize_ticker(ticker)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT * FROM price_history
+            WHERE ticker = ?
+            ORDER BY timestamp ASC
+            LIMIT ?
+            """,
+            (clean, limit),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
