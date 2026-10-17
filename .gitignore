@@ -74,6 +74,7 @@ logs/
 tmp/
 scratch/
 
-# 8. Personal Network & Firewall Setup Scripts (Private)
-Allow_Firewall_Access.bat
+# 8. Local Batch Scripts & Personal OS Utilities (Private)
+*.bat
+*.cmd
 

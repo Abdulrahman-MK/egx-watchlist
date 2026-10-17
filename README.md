@@ -18,7 +18,7 @@ A local-only, high-performance financial terminal and real-time watchlist for th
 - **Stream Controls & Clean Exit**:
   - **Pause/Resume Stream**: Pause upstream quote emissions without closing the terminal.
   - **Red Exit App Button**: Gracefully stops upstream market WebSockets, commits SQLite transactions, and terminates the backend process with a clean shutdown screen.
-- **One-Click Desktop App (No Terminal Required)**: Launch silently via `Start_EGX_Tracker.bat` (native desktop window powered by `pywebview` with Edge/Chrome App Mode fallback).
+- **Standalone Desktop Window (Edge/Chrome App Mode)**: Launch via `python desktop_launcher.py` for a dedicated, borderless desktop window with isolated user profile and automated zero-leak process lifecycle.
 - **Single-Command .EXE Packaging**: Bundle the entire app (FastAPI, SQLite, and compiled React UI) into a standalone Windows `.exe` using `python build_exe.py`.
 - **Market Hours Guard (Africa/Cairo)**: Checks official EGX hours (**Sunday through Thursday, 10:00 to 14:30 Cairo time**). Outside market hours or during weekends, serves closing snapshots without hammering upstream feeds.
 - **Bloomberg / TradingView Terminal Aesthetic**: Dark mode theme, JetBrains Mono font, and cell tick flashing (**green** on price up, **red** on price down).
@@ -31,10 +31,11 @@ For an in-depth breakdown of WebSocket framing, protocol heartbeats, and sequenc
 
 ```
 egx-watchlist/
-├── Start_EGX_Tracker.bat      # One-click silent desktop launcher
-├── desktop_launcher.py        # Native desktop window runner with auto-shutdown
-├── build_exe.py               # Standalone PyInstaller packaging script
+├── desktop_launcher.py        # Native desktop runner with graceful teardown & headless support
+├── build_exe.py               # Single-command PyInstaller packaging script
+├── app.ico                    # High-res multi-resolution application & taskbar icon
 ├── ARCHITECTURE.md            # System blueprint, sequence diagrams, and data flow
+├── UPDATE.md                  # Network architecture, firewall handling & data saver logs
 ├── README.md                  # Project documentation & setup instructions
 ├── .env.example               # Safe environment configuration template
 ├── .gitignore                 # Strict protection for credentials, DBs, and builds
@@ -81,37 +82,39 @@ egx-watchlist/
 
 ## 🚀 Quick Start
 
-### Option A: One-Click Desktop Launch (Recommended)
-Simply double-click **`Start_EGX_Tracker.bat`**.
-- Starts the backend server silently in the background.
-- Opens a dedicated, borderless application window.
-- Closing the window automatically releases port 8000 and saves your data.
+### Option A: Desktop App Mode (Recommended)
 
-### Option B: Developer Mode
+Launch the unified server and dedicated desktop application window:
 
-#### 1. Setup Environment
-```powershell
+```bash
+python desktop_launcher.py
+```
+- Spawns the FastAPI backend (hosting the compiled React UI, SQLite persistence, and upstream WebSockets).
+- Launches an isolated, borderless native window via Microsoft Edge / Google Chrome in App Mode.
+- Automatically releases port 8000 and cleanly stops all connections upon exit.
+- Supports headless quiet server mode: `python desktop_launcher.py --headless`
+
+### Option B: Full-Stack Developer Mode (Hot-Reload)
+
+#### 1. Setup Backend Environment
+```bash
 cd backend
 python -m venv venv
-.\venv\Scripts\activate
+# Windows: .\venv\Scripts\activate | macOS/Linux: source venv/bin/activate
 pip install -r requirements.txt
-```
-
-#### 2. Start Backend (Runs on 127.0.0.1:8000)
-```powershell
 python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 - **REST Endpoints**: `http://127.0.0.1:8000/api/status`
 - **Interactive Swagger Docs**: `http://127.0.0.1:8000/docs`
 - **WebSocket Endpoint**: `ws://127.0.0.1:8000/ws`
 
-#### 3. Start Frontend Development Server
-```powershell
+#### 2. Setup Frontend Development Server
+```bash
 cd frontend
 npm install
 npm run dev
 ```
-Open **`http://127.0.0.1:5173`** in your browser.
+Open **`http://localhost:5173`** in your browser with instant Vite HMR.
 
 ---
 
