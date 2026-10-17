@@ -52,12 +52,14 @@ def package_executable():
     launcher_script = str(PROJECT_ROOT / "desktop_launcher.py")
     dist_data_arg = f"{str(FRONTEND_DIST)};dist"
     backend_data_arg = f"{str(BACKEND_DIR)};backend"
+    icon_path = str(PROJECT_ROOT / "app.ico")
 
     args = [
         launcher_script,
         "--name=EGX_Tracker",
         "--onefile",
         "--windowed",  # Suppress command prompt window
+        f"--icon={icon_path}",
         f"--add-data={dist_data_arg}",
         f"--add-data={backend_data_arg}",
         f"--paths={str(BACKEND_DIR)}",

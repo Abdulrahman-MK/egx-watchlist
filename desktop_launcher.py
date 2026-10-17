@@ -244,8 +244,20 @@ def main():
             show_alert("EGX Terminal Error", f"{msg}\n\nCheck egx_launcher.log for details.")
             sys.exit(1)
 
-    log_msg("Server is responding at http://127.0.0.1:8000. Launching native window...")
+    log_msg("Server is responding at http://127.0.0.1:8000.")
 
+    # Check for headless / background server mode (no window)
+    if "--headless" in sys.argv or "--server" in sys.argv:
+        log_msg("Running in Headless Server mode (no desktop window). Streaming to network...")
+        try:
+            while is_server_running(APP_URL):
+                time.sleep(1)
+        except (KeyboardInterrupt, SystemExit):
+            pass
+        request_graceful_shutdown()
+        return
+
+    log_msg("Launching native desktop window...")
     # 2. Launch standalone App Mode (Edge/Chrome native window with isolated profile)
     opened = launch_browser_app_mode()
 
