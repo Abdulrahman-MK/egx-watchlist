@@ -27,7 +27,10 @@ export function StockSearchModal({
     if (isOpen) {
       setLoading(true);
       const cleanQ = query.trim();
-      fetch(`http://127.0.0.1:8000/api/symbols?q=${encodeURIComponent(cleanQ)}`)
+      const apiBase = typeof window !== 'undefined'
+        ? (window.location.port === '5173' ? `${window.location.protocol}//${window.location.hostname}:8000/api` : `${window.location.protocol}//${window.location.host}/api`)
+        : '/api';
+      fetch(`${apiBase}/symbols?q=${encodeURIComponent(cleanQ)}`)
         .then(res => res.json())
         .then(data => {
           setStocksList(data.symbols || []);

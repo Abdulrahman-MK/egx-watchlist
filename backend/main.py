@@ -73,11 +73,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS configuration strictly restricting access to localhost origins
+# CORS configuration supporting localhost and Tailscale mesh network
+cors_origins = settings.cors_origins_list
+allow_all = "*" in cors_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=True,
+    allow_origins=["*"] if allow_all else cors_origins,
+    allow_credentials=not allow_all,
     allow_methods=["*"],
     allow_headers=["*"],
 )

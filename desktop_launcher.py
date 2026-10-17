@@ -97,6 +97,7 @@ def show_alert(title: str, message: str):
 try:
     import uvicorn
     from main import app
+    from app.config import settings
 except Exception as e:
     err_str = traceback.format_exc()
     log_msg(f"Failed to import backend modules: {err_str}")
@@ -113,10 +114,11 @@ def run_backend_server():
     """Starts Uvicorn serving FastAPI in a background daemon thread."""
     global global_server, server_crash_error
     try:
+        bind_host = settings.HOST if settings.HOST else "0.0.0.0"
         config = uvicorn.Config(
             app=app,
-            host="127.0.0.1",
-            port=8000,
+            host=bind_host,
+            port=settings.PORT,
             log_config=None,  # Suppress default console formatter that queries sys.stdout.isatty
             log_level="warning",
             access_log=False,
@@ -124,7 +126,7 @@ def run_backend_server():
         global_server = uvicorn.Server(config)
         # In a background thread, disable uvicorn's OS signal handlers to prevent ValueError
         global_server.install_signal_handlers = lambda: None
-        log_msg("Uvicorn server starting on 127.0.0.1:8000...")
+        log_msg(f"Uvicorn server starting on {bind_host}:{settings.PORT}...")
         global_server.run()
     except Exception as e:
         err_str = traceback.format_exc()

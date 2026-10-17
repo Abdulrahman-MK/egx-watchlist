@@ -12,8 +12,21 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-const WS_URL = 'ws://127.0.0.1:8000/ws';
-const API_BASE = 'http://127.0.0.1:8000/api';
+const getWsUrl = () => {
+  if (typeof window === 'undefined') return 'ws://127.0.0.1:8000/ws';
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const host = window.location.port === '5173' ? `${window.location.hostname}:8000` : window.location.host;
+  return `${proto}//${host}/ws`;
+};
+
+const getApiBase = () => {
+  if (typeof window === 'undefined') return 'http://127.0.0.1:8000/api';
+  const host = window.location.port === '5173' ? `${window.location.hostname}:8000` : window.location.host;
+  return `${window.location.protocol}//${host}/api`;
+};
+
+const WS_URL = getWsUrl();
+const API_BASE = getApiBase();
 
 export function useEGXWebSocket() {
   const [connectionStatus, setConnectionStatus] = useState('connecting'); // 'connected' | 'connecting' | 'disconnected'
@@ -174,6 +187,24 @@ export function useEGXWebSocket() {
       Object.values(flashTimeoutsRef.current).forEach(clearTimeout);
     };
   }, [handleTickUpdate, isShutDown]);
+
+  // Mobile Data Saver: Automatically pause socket updates when phone screen turns off / tab is hidden
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ action: 'pause' }));
+        }
+      } else {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ action: 'resume' }));
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
 
   // Pause / Resume Stream
   const togglePauseStream = async () => {

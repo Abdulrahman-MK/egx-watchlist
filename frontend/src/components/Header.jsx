@@ -50,13 +50,15 @@ export function Header({
                 EGX TERMINAL
               </h1>
               <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                127.0.0.1:8000
+                {typeof window !== 'undefined' ? window.location.host : '127.0.0.1:8000'}
               </span>
             </div>
             <p className="text-[11px] text-terminal-muted flex items-center gap-1.5 font-sans">
               <span>Egyptian Exchange Live Screener</span>
               <span className="text-slate-600">•</span>
-              <span className="font-mono text-[10px] text-sky-400/90">Local Only</span>
+              <span className="font-mono text-[10px] text-sky-400/90">
+                {typeof window !== 'undefined' && window.location.hostname.startsWith('100.') ? 'Tailscale Mesh' : 'Local Only'}
+              </span>
             </p>
           </div>
         </div>

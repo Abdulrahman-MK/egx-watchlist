@@ -75,7 +75,12 @@ class Settings(BaseSettings):
         Returns:
             List[str]: Clean list of allowed host origins.
         """
-        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+        if "*" in self.CORS_ORIGINS:
+            return ["*"]
+        origins = [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+        if self.HOST == "0.0.0.0" or self.HOST.startswith("100."):
+            origins.append("*")
+        return list(set(origins))
 
 
 settings = Settings()
