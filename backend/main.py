@@ -12,10 +12,11 @@ from pathlib import Path
 import sys
 from typing import Dict, Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+import time
 
 from app.config import settings
 from app.database import init_db, get_watchlist_symbols
@@ -68,10 +69,27 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="EGX Real-Time Watchlist API",
-    description="Local-only, real-time Egyptian Exchange (EGX) terminal running strictly on 127.0.0.1",
+    description="Local-only, real-time Egyptian Exchange (EGX) terminal running on host " + settings.HOST,
     version="2.0.0",
     lifespan=lifespan,
 )
+
+# Request logger middleware to record access attempts from LAN / Mesh VPN
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    client_ip = request.client.host if request.client else "unknown"
+    start_time = time.time()
+    try:
+        response = await call_next(request)
+        elapsed_ms = (time.time() - start_time) * 1000
+        # Filter frequent local status poll to keep logs clean
+        if request.url.path != "/api/status" or client_ip != "127.0.0.1":
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [HTTP] {client_ip} -> {request.method} {request.url.path} [{response.status_code}] ({elapsed_ms:.1f}ms)")
+        return response
+    except Exception as e:
+        elapsed_ms = (time.time() - start_time) * 1000
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [HTTP ERROR] {client_ip} -> {request.method} {request.url.path} : {e} ({elapsed_ms:.1f}ms)")
+        raise
 
 # CORS configuration supporting localhost and Tailscale mesh network
 cors_origins = settings.cors_origins_list
@@ -97,6 +115,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
     Immediately transmits INITIAL_STATE upon connection, then listens for client actions.
     """
+    client_host = websocket.client.host if websocket.client else "unknown"
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [WebSocket Connected] Client: {client_host}")
     await stream_manager.connect_client(websocket)
     try:
         # 1. Transmit initial market state and cached quotes
@@ -140,9 +160,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 pass
 
     except WebSocketDisconnect:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [WebSocket Disconnected] Client: {client_host}")
         stream_manager.disconnect_client(websocket)
     except Exception as e:
-        print(f"[WebSocket] Exception: {e}")
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [WebSocket Exception] Client: {client_host} -> {e}")
         stream_manager.disconnect_client(websocket)
 
 

@@ -73,3 +73,7 @@ desktop.ini
 logs/
 tmp/
 scratch/
+
+# 8. Personal Network & Firewall Setup Scripts (Private)
+Allow_Firewall_Access.bat
+

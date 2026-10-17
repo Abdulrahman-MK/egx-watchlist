@@ -18,18 +18,27 @@ import sys
 
 # Determine base directory paths (supports development and PyInstaller standalone .exe)
 if getattr(sys, "frozen", False):
-    PROJECT_ROOT = Path(sys.executable).resolve().parent
-    BACKEND_DIR = PROJECT_ROOT
-    APP_DIR = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT)) / "app"
+    EXE_DIR = Path(sys.executable).resolve().parent
+    PROJECT_ROOT = EXE_DIR
+    BACKEND_DIR = EXE_DIR
+    APP_DIR = Path(getattr(sys, "_MEIPASS", EXE_DIR)) / "app"
 else:
     APP_DIR = Path(__file__).resolve().parent
     BACKEND_DIR = APP_DIR.parent
     PROJECT_ROOT = BACKEND_DIR.parent
 
-# Check for .env in project root, then backend directory
-ENV_FILE = PROJECT_ROOT / ".env"
-if not ENV_FILE.exists():
-    ENV_FILE = BACKEND_DIR / ".env"
+# Check candidate locations for .env (.exe dir, parent repo dir, backend dir)
+candidate_env_paths = [
+    PROJECT_ROOT / ".env",
+    PROJECT_ROOT.parent / ".env",
+    BACKEND_DIR / ".env",
+    Path(sys.executable).resolve().parent / ".env",
+]
+ENV_FILE = None
+for candidate in candidate_env_paths:
+    if candidate.is_file():
+        ENV_FILE = candidate
+        break
 
 
 
@@ -37,7 +46,7 @@ class Settings(BaseSettings):
     """Central settings class powered by Pydantic BaseSettings.
 
     Attributes:
-        HOST (str): Network bind address. Strictly set to 127.0.0.1 for local isolation.
+        HOST (str): Network bind address. Defaults to 0.0.0.0 for LAN/Tailscale mesh accessibility.
         PORT (int): HTTP/WebSocket server port. Default is 8000.
         DATA_PROVIDER (str): Active market data adapter ('tradingview' or 'egxapi').
         TV_AUTH_TOKEN (str): Optional TradingView Pro/Premium user token for real-time delayless feed.
@@ -47,10 +56,10 @@ class Settings(BaseSettings):
         MARKET_OPEN_MINUTE (int): Regular session open minute in Cairo (00).
         MARKET_CLOSE_HOUR (int): Regular session close hour in Cairo (2 PM).
         MARKET_CLOSE_MINUTE (int): Regular session close minute in Cairo (30 min -> 14:30).
-        CORS_ORIGINS (str): Comma-separated list of allowed origins strictly restricted to localhost.
+        CORS_ORIGINS (str): Comma-separated list of allowed origins.
     """
 
-    HOST: str = "127.0.0.1"
+    HOST: str = "0.0.0.0"
     PORT: int = 8000
     DATA_PROVIDER: str = "tradingview"
     TV_AUTH_TOKEN: str = ""
@@ -63,7 +72,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:8000,http://localhost:8000"
 
     model_config = SettingsConfigDict(
-        env_file=str(ENV_FILE) if ENV_FILE.exists() else None,
+        env_file=str(ENV_FILE) if (ENV_FILE and ENV_FILE.is_file()) else None,
         env_file_encoding="utf-8",
         extra="ignore",
     )
