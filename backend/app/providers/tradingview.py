@@ -33,12 +33,12 @@ import httpx
 import websockets
 from app.config import settings
 from app.providers.base import DataProvider
-from app.providers.mock_snapshot import get_initial_snapshots, generate_snapshot_quote
-from app.symbols import ALL_STATIC_SYMBOLS, INDICES, normalize_ticker
+from app.symbols import ALL_STATIC_SYMBOLS, SEED_STOCKS, INDICES, normalize_ticker
 from app.market_guard import check_market_hours, get_cairo_now
 from app.database import save_quote_to_db, get_cached_quotes_from_db
 
 TV_WS_URL = "wss://data.tradingview.com/socket.io/websocket"
+TV_SCANNER_URL = "https://scanner.tradingview.com/egypt/scan"
 TV_ORIGIN = "https://www.tradingview.com"
 TV_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -47,12 +47,17 @@ TV_USER_AGENT = (
 
 
 class TradingViewWebSocketProvider(DataProvider):
-    """Adapter for TradingView's live quote streaming WebSocket.
+    """Adapter for TradingView's live quote streaming WebSocket and Scanner API.
 
-    Attributes:
-        auth_token (str): TradingView user token or 'unauthorized_user_token'.
-        is_connected (bool): True if upstream socket is established.
-        is_paused (bool): True if streaming ingestion is paused by user.
+    Architectural Design:
+    - Zero Mock Data: Quotes are strictly ingested from authentic TradingView endpoints.
+    - Dual Ingestion Engine:
+      1. Egypt Scanner API (24/7/365): Fetches real-time closing & session quotes for all 295+
+         EGX equities and benchmark indices (EGX30, EGX70EWI, EGX100EWI) with full OHLCV,
+         volume, and technical indicator ratings (Recommend.All, RSI).
+      2. WebSocket Streaming (10:00 - 14:30 Cairo): Subscribes to live tick-by-tick market
+         updates during active trading sessions, and retrieves ICE-indexed benchmarks (SHARIAH).
+    - SQLite Caching: Persists authentic ticks to `latest_quotes` and `price_history`.
     """
 
     def __init__(self):
@@ -63,7 +68,9 @@ class TradingViewWebSocketProvider(DataProvider):
         self._session_id: str = self._generate_session_id("qs_")
         self._task: Optional[asyncio.Task] = None
         self._reconnect_delay = 3.0
-        self._cache = get_initial_snapshots()
+        # Authentic in-memory quote cache (strictly populated by real market data)
+        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._is_syncing: bool = False
 
     def _generate_session_id(self, prefix: str = "qs_") -> str:
         """Generates random alphanumeric quote session ID required by TradingView."""
@@ -185,57 +192,158 @@ class TradingViewWebSocketProvider(DataProvider):
             except Exception as e:
                 print(f"[{self.name}] Failed to send quote_remove_symbols: {e}")
 
-    async def _fetch_scanner_closing_snapshot(self, symbols: List[str]) -> None:
-        """Fallback to TradingView Egypt Scanner API for official closing quotes."""
-        tv_symbols = [self._to_tv_symbol(s) for s in symbols]
-        payload = {
-            "symbols": {"tickers": tv_symbols},
-            "columns": [
-                "name", "description", "close", "change", "change_abs",
-                "high", "low", "open", "volume", "Recommend.All", "RSI"
-            ],
-        }
+    async def sync_authentic_market_snapshot(self, symbols: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
+        """Synchronizes 100% authentic, real-time or closing market quotes from TradingView.
+
+        Algorithmic and Financial Rationale:
+        ------------------------------------
+        1. TradingView's Egypt Scanner API (POST https://scanner.tradingview.com/egypt/scan)
+           serves 24/7/365 without authentication. It delivers certified OHLCV, session
+           highs/lows, trading volume, and composite technical momentum indicators (Recommend.All, RSI)
+           for all 295+ Egyptian Exchange securities and benchmark indices (EGX30, EGX70EWI, EGX100EWI).
+        2. The EGX 33 Shariah Index ('EGX:SHARIAH') is indexed separately under the ICE provider,
+           requiring a dedicated one-shot WebSocket quote session handshake.
+        3. This function eliminates all synthetic/mock data generation by fetching authentic numbers
+           directly from the primary source and populating both memory cache and SQLite storage.
+
+        Args:
+            symbols (Optional[List[str]]): Specific tickers to update, or None to synchronize
+                                           the entire Egyptian Exchange market.
+
+        Returns:
+            Dict[str, Dict[str, Any]]: Updated dictionary of normalized quotes.
+        """
         headers = {
             "User-Agent": TV_USER_AGENT,
             "Content-Type": "application/json",
+            "Accept": "application/json",
         }
+        columns = [
+            "name", "description", "close", "change", "change_abs",
+            "high", "low", "open", "volume", "Recommend.All", "RSI"
+        ]
+        updated_quotes: Dict[str, Dict[str, Any]] = {}
+
+        # 1. Determine query targets
+        is_full_sync = symbols is None or len(symbols) == 0
+        norm_symbols = [normalize_ticker(s) for s in symbols] if symbols else []
+
         try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.post("https://scanner.tradingview.com/egypt/scan", json=payload, headers=headers)
-                if resp.status_code == 200:
-                    rows = resp.json().get("data", [])
-                    for r in rows:
-                        s_name = r.get("s", "")
-                        d = r.get("d", [])
-                        if len(d) >= 9:
-                            close_p = d[2]
-                            ch_pct = d[3]
-                            ch_abs = d[4]
-                            hi = d[5]
-                            lo = d[6]
-                            op = d[7]
-                            vol = d[8]
-                            rec_all = d[9] if len(d) > 9 else None
-                            rsi_val = d[10] if len(d) > 10 else None
-                            prev = (close_p - ch_abs) if (close_p is not None and ch_abs is not None) else close_p
-                            v = {
-                                "lp": close_p,
-                                "ch": ch_abs,
-                                "chp": ch_pct,
-                                "high_price": hi,
-                                "low_price": lo,
-                                "open_price": op,
-                                "volume": vol,
-                                "prev_close_price": prev,
-                                "recommend_all": rec_all,
-                                "rsi": rsi_val,
-                            }
-                            await self._process_quote_update(s_name, v)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                if is_full_sync:
+                    # A. Bulk query all 295+ listed Egyptian equities
+                    bulk_payload = {
+                        "filter": [{"left": "exchange", "operation": "equal", "right": "EGX"}],
+                        "columns": columns,
+                        "sort": {"sortBy": "name", "sortOrder": "asc"},
+                        "range": [0, 500],
+                    }
+                    resp_bulk = await client.post(TV_SCANNER_URL, json=bulk_payload, headers=headers)
+                    if resp_bulk.status_code == 200:
+                        rows = resp_bulk.json().get("data", [])
+                        for r in rows:
+                            tv_sym = r.get("s", "")
+                            d = r.get("d", [])
+                            if len(d) >= 9:
+                                await self._parse_and_cache_scanner_row(tv_sym, d)
+
+                    # B. Query core benchmark indices (categorized outside standard equity filters)
+                    idx_tv_symbols = ["EGX:EGX30", "EGX:EGX70EWI", "EGX:EGX100EWI"]
+                    idx_payload = {
+                        "symbols": {"tickers": idx_tv_symbols},
+                        "columns": columns,
+                    }
+                    resp_idx = await client.post(TV_SCANNER_URL, json=idx_payload, headers=headers)
+                    if resp_idx.status_code == 200:
+                        for r in resp_idx.json().get("data", []):
+                            await self._parse_and_cache_scanner_row(r.get("s", ""), r.get("d", []))
+
+                else:
+                    # Targeted query for explicitly requested tickers
+                    tv_targets = [self._to_tv_symbol(s) for s in norm_symbols if normalize_ticker(s) not in ("SHARIAH", "EGX33SHR")]
+                    if tv_targets:
+                        target_payload = {
+                            "symbols": {"tickers": tv_targets},
+                            "columns": columns,
+                        }
+                        resp_target = await client.post(TV_SCANNER_URL, json=target_payload, headers=headers)
+                        if resp_target.status_code == 200:
+                            for r in resp_target.json().get("data", []):
+                                await self._parse_and_cache_scanner_row(r.get("s", ""), r.get("d", []))
+
         except Exception as e:
-            print(f"[{self.name}] Scanner fallback warning: {e}")
+            print(f"[{self.name}] Scanner sync warning: {e}")
+
+        # 2. Synchronize EGX 33 Shariah index if included in sync scope
+        if is_full_sync or any(normalize_ticker(s) in ("SHARIAH", "EGX33SHR", "EGX33") for s in norm_symbols):
+            try:
+                shariah_res = await self._fetch_one_shot_closing_snapshot(["SHARIAH"])
+                updated_quotes.update(shariah_res)
+            except Exception as e:
+                print(f"[{self.name}] Shariah index WebSocket sync warning: {e}")
+
+        # Collect results for requested symbols or all cache
+        target_keys = norm_symbols if norm_symbols else list(self._cache.keys())
+        for k in target_keys:
+            if k in self._cache:
+                updated_quotes[k] = self._cache[k]
+
+        return updated_quotes
+
+    async def _parse_and_cache_scanner_row(self, tv_sym: str, d: List[Any]) -> None:
+        """Parses a raw column array from TradingView Scanner and commits to memory and SQLite.
+
+        Column Index Mapping:
+            d[0]: ticker (str)
+            d[1]: description / name (str)
+            d[2]: close price (float)
+            d[3]: change percentage (float)
+            d[4]: absolute change in currency (float)
+            d[5]: session high (float)
+            d[6]: session low (float)
+            d[7]: session open (float)
+            d[8]: total volume (int)
+            d[9]: Recommend.All composite technical score (-1.0 to 1.0)
+            d[10]: RSI (14) Relative Strength Index
+        """
+        if len(d) < 9 or d[2] is None:
+            return
+
+        close_p = float(d[2])
+        ch_pct = float(d[3]) if d[3] is not None else 0.0
+        ch_abs = float(d[4]) if d[4] is not None else 0.0
+        hi_p = float(d[5]) if d[5] is not None else close_p
+        lo_p = float(d[6]) if d[6] is not None else close_p
+        op_p = float(d[7]) if d[7] is not None else close_p
+        vol = int(d[8]) if d[8] is not None else 0
+        rec_all = float(d[9]) if (len(d) > 9 and d[9] is not None) else None
+        rsi_val = float(d[10]) if (len(d) > 10 and d[10] is not None) else None
+        prev_p = round(close_p - ch_abs, 2) if ch_abs is not None else close_p
+
+        values = {
+            "lp": close_p,
+            "ch": ch_abs,
+            "chp": ch_pct,
+            "high_price": hi_p,
+            "low_price": lo_p,
+            "open_price": op_p,
+            "volume": vol,
+            "prev_close_price": prev_p,
+            "recommend_all": rec_all,
+            "rsi": rsi_val,
+        }
+        await self._process_quote_update(tv_sym, values)
+
+    async def _fetch_scanner_closing_snapshot(self, symbols: List[str]) -> None:
+        """Legacy helper redirecting to the centralized authentic market synchronizer."""
+        await self.sync_authentic_market_snapshot(symbols)
 
     async def _fetch_one_shot_closing_snapshot(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
-        """Performs a fast one-shot quote handshake to retrieve authentic closing data."""
+        """Performs a targeted one-shot WebSocket quote session handshake.
+
+        Used specifically for symbols requiring interactive upstream protocol negotiation
+        (such as 'EGX:SHARIAH' under the ICE data feed provider).
+        """
         if not symbols:
             return {}
         tv_symbols = [self._to_tv_symbol(s) for s in symbols]
@@ -306,24 +414,25 @@ class TradingViewWebSocketProvider(DataProvider):
                     if len(quotes_received) >= len(symbols):
                         break
         except Exception as e:
-            print(f"[{self.name}] One-shot WebSocket handshake notice: {e}. Trying scanner fallback.")
-            await self._fetch_scanner_closing_snapshot(symbols)
+            print(f"[{self.name}] One-shot WebSocket handshake notice: {e}")
 
         return quotes_received
 
     async def get_snapshot(self, symbols: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
-        """Retrieves latest quote or closing snapshot for requested symbols.
+        """Retrieves verified authentic quotes or official closing snapshots for requested symbols.
 
-        Resolution hierarchy:
-        1. In-memory cache (self._cache)
-        2. SQLite persistent cache (latest_quotes)
-        3. Real-time one-shot closing fetch from TradingView
-        4. Static metadata as emergency offline fallback
+        Resolution Hierarchy (Strictly Authentic):
+        -------------------------------------------
+        1. In-memory cache (self._cache) populated from real ticks/scans.
+        2. SQLite persistent cache (latest_quotes) saved from previous sessions.
+        3. Real-time synchronizer (sync_authentic_market_snapshot) to pull latest data.
+        4. Zero synthetic mock prices: If offline, returns symbol metadata with last_price 0.0.
         """
         target_symbols = [normalize_ticker(s) for s in symbols] if symbols else list(self._cache.keys())
         result: Dict[str, Dict[str, Any]] = {}
         missing: List[str] = []
 
+        # 1. In-memory cache check
         for s in target_symbols:
             if s in self._cache and self._cache[s].get("last_price", 0) > 0:
                 result[s] = self._cache[s]
@@ -343,31 +452,52 @@ class TradingViewWebSocketProvider(DataProvider):
             except Exception as e:
                 print(f"[{self.name}] DB cache lookup notice: {e}")
 
-        # 3. If any symbol is still missing, fetch genuine closing snapshot
+        # 3. Pull authentic snapshot from TradingView for any remaining missing symbols
         if missing:
-            print(f"[{self.name}] Fetching real closing snapshot for: {missing}")
-            fetched = await self._fetch_one_shot_closing_snapshot(missing)
+            print(f"[{self.name}] Fetching authentic snapshot from TradingView for: {missing}")
+            fetched = await self.sync_authentic_market_snapshot(missing)
             for s, q in fetched.items():
-                result[s] = q
+                if q.get("last_price", 0) > 0:
+                    result[s] = q
 
-        # 4. Emergency fallback for any remaining symbol
+        # 4. Fallback for completely unknown symbols (safe metadata without fake prices)
         for s in target_symbols:
-            if s not in result or result[s].get("last_price", 0) <= 0:
-                snap = generate_snapshot_quote(s)
-                self._cache[s] = snap
-                result[s] = snap
+            if s not in result:
+                static_meta = ALL_STATIC_SYMBOLS.get(s, {})
+                result[s] = {
+                    "ticker": s,
+                    "tv_symbol": self._to_tv_symbol(s),
+                    "name_en": static_meta.get("name_en", s),
+                    "name_ar": static_meta.get("name_ar", s),
+                    "is_index": s in INDICES,
+                    "sector": static_meta.get("sector", "General"),
+                    "sector_ar": static_meta.get("sector_ar", "عام"),
+                    "currency": static_meta.get("currency", "EGP"),
+                    "last_price": 0.0,
+                    "prev_close": 0.0,
+                    "change": 0.0,
+                    "change_pct": 0.0,
+                    "high": 0.0,
+                    "low": 0.0,
+                    "open": 0.0,
+                    "volume": 0,
+                    "signal": "NEUTRAL",
+                    "rating_score": 0.0,
+                    "rsi": None,
+                    "updated_at": get_cairo_now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
 
         return result
 
     async def _connection_loop(self) -> None:
         """Main connection and message ingestion loop with auto-reconnect."""
-        # Pre-fetch authentic closing snapshot on startup for indices + watchlist
+        # Initial synchronization: Fetch authentic quotes for all symbols and indices on startup
         try:
-            init_symbols = list(set(INDICES.keys()).union(self._subscribed_symbols))
-            print(f"[{self.name}] Pre-fetching authentic closing snapshot on startup for: {init_symbols}")
-            await self._fetch_one_shot_closing_snapshot(init_symbols)
+            print(f"[{self.name}] Initializing authentic market snapshot on startup...")
+            await self.sync_authentic_market_snapshot()
+            print(f"[{self.name}] Successfully cached authentic quotes for {len(self._cache)} securities.")
         except Exception as e:
-            print(f"[{self.name}] Initial closing pre-fetch notice: {e}")
+            print(f"[{self.name}] Startup market snapshot notice: {e}")
 
         while self._running:
             market_info = check_market_hours()
@@ -478,9 +608,14 @@ class TradingViewWebSocketProvider(DataProvider):
                 await self._process_quote_update(tv_symbol, values)
 
     async def _process_quote_update(self, tv_symbol: str, values: Dict[str, Any]) -> None:
-        """Normalizes raw quote payload, caches in SQLite, and emits tick."""
+        """Normalizes raw quote payload, caches in SQLite, and emits tick.
+
+        Ensures full metadata resolution (English/Arabic names, sectors) from static seeds
+        when updating quotes for the first time.
+        """
         ticker = self._to_internal_ticker(tv_symbol)
         existing = self._cache.get(ticker, {})
+        meta = ALL_STATIC_SYMBOLS.get(ticker) or SEED_STOCKS.get(ticker) or {}
 
         last_price = values.get("lp", existing.get("last_price", 0.0))
         prev_close = values.get("prev_close_price", existing.get("prev_close", last_price))
@@ -498,7 +633,6 @@ class TradingViewWebSocketProvider(DataProvider):
         now_cairo = get_cairo_now()
 
         # Quantitative sentiment resolution (Bullish, Bearish, Neutral)
-        # Pulls from TradingView Recommend.All score or background sentiment cache
         from app.services.technical_sentiment import get_cached_sentiment, calculate_signal
         sent = get_cached_sentiment(ticker)
         rec_score = values.get("recommend_all")
@@ -517,15 +651,20 @@ class TradingViewWebSocketProvider(DataProvider):
 
         rsi_val = values.get("rsi") or (sent.get("rsi") if sent else None)
 
+        name_en = existing.get("name_en") or meta.get("name_en", ticker)
+        name_ar = existing.get("name_ar") or meta.get("name_ar", ticker)
+        sector = existing.get("sector") or meta.get("sector", "Listed Equity" if ticker not in INDICES else "Benchmark Index")
+        sector_ar = existing.get("sector_ar") or meta.get("sector_ar", "أسهم مدرجة" if ticker not in INDICES else "مؤشر رئيسي")
+
         normalized_quote = {
             "ticker": ticker,
             "tv_symbol": tv_symbol,
-            "name_en": existing.get("name_en", ticker),
-            "name_ar": existing.get("name_ar", ticker),
+            "name_en": name_en,
+            "name_ar": name_ar,
             "is_index": ticker in INDICES,
-            "sector": existing.get("sector", "General"),
-            "sector_ar": existing.get("sector_ar", "عام"),
-            "currency": existing.get("currency", "EGP"),
+            "sector": sector,
+            "sector_ar": sector_ar,
+            "currency": existing.get("currency") or meta.get("currency", "EGP"),
             "last_price": round(float(last_price), 2),
             "prev_close": round(float(prev_close), 2),
             "change": round(float(change), 2),

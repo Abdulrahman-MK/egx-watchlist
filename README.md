@@ -14,6 +14,12 @@ A local-only, high-performance financial terminal and real-time watchlist for th
 
 - **Dynamic Full-EGX Symbol Discovery**: Queries TradingView's Egypt Scanner on startup to discover and cache all **~296+ listed EGX securities** across EGX 30, EGX 70, EGX 100, and recent IPOs (e.g. `ACTF`, `COPR`), paired with English and Arabic company names.
 - **Immediate Custom IPO Ticker Fallback**: Type any ticker in the search bar to immediately subscribe to `EGX:[INPUT]` even on its first day of listing.
+- **Interactive Stock Detail Modal**: Click any stock row or benchmark card to launch an interactive inspection modal with responsive crosshair charts, key statistics, and news catalysts.
+- **Multi-Timeframe Charting (1D, 1W, 1M, 1Y)**:
+  - **1D Session Horizon**: Resets every trading day at 09:00 AM Cairo time (1 hour before market open). Anchors strictly to today's open price to reveal authentic intraday progression.
+  - **1W, 1M, 1Y Horizons**: Deliver verified historical candlestick trends from TradingView's charting protocol.
+- **Scraped Market News & Catalyst Sentiment**: Real-time news aggregation for individual equities and EGX market indices, featuring bilingual sentiment classification (Bullish Catalysts, Bearish Catalysts, Neutral) explaining upward or downward pressure.
+- **Quantitative Technical Signals**: Integrated composite rating scores (-1.0 to +1.0) derived from 26 indicators, RSI(14) momentum, MACD, and EMA20/SMA50 moving averages.
 - **Top Pinned Benchmark Bar**: 4 permanently pinned cards for **EGX 30**, **EGX 70 EWI**, **EGX 100 EWI**, and **EGX 33 Shariah Index** (`SHARIAH` / `EGX:EGX33SHR`).
 - **Stream Controls & Clean Exit**:
   - **Pause/Resume Stream**: Pause upstream quote emissions without closing the terminal.
@@ -21,7 +27,7 @@ A local-only, high-performance financial terminal and real-time watchlist for th
 - **Standalone Desktop Window (Edge/Chrome App Mode)**: Launch via `python desktop_launcher.py` for a dedicated, borderless desktop window with isolated user profile and automated zero-leak process lifecycle.
 - **Single-Command .EXE Packaging**: Bundle the entire app (FastAPI, SQLite, and compiled React UI) into a standalone Windows `.exe` using `python build_exe.py`.
 - **Market Hours Guard (Africa/Cairo)**: Checks official EGX hours (**Sunday through Thursday, 10:00 to 14:30 Cairo time**). Outside market hours or during weekends, serves closing snapshots without hammering upstream feeds.
-- **Bloomberg / TradingView Terminal Aesthetic**: Dark mode theme, JetBrains Mono font, and cell tick flashing (**green** on price up, **red** on price down).
+- **Institutional Terminal Aesthetic**: Clean Bloomberg/Reuters terminal dark mode theme, zero emojis, JetBrains Mono tabular typography, and tick flashing (**green** on price up, **red** on price down).
 
 ---
 
@@ -45,33 +51,35 @@ egx-watchlist/
 │   ├── egx_watchlist.db       # Local SQLite database (auto-generated)
 │   └── app/
 │       ├── config.py          # Pydantic settings loading .env
-│       ├── database.py        # aiosqlite persistence for symbols & watchlist
+│       ├── database.py        # aiosqlite persistence for symbols, quotes & price history
 │       ├── market_guard.py    # Cairo trading week and hours evaluator
 │       ├── symbols.py         # Static indices and seed company definitions
 │       ├── services/
 │       │   ├── symbol_sync.py # Dynamic screener sync fetching 296+ EGX equities
-│       │   └── stream_manager.py # WebSocket distribution, pause/resume, and shutdown
+│       │   ├── stream_manager.py # WebSocket distribution, pause/resume, and shutdown
+│       │   ├── technical_sentiment.py # Quantitative indicator ratings & RSI classification
+│       │   ├── historical_chart.py    # Multi-timeframe OHLCV & 09:00 AM reset anchor service
+│       │   └── market_news.py         # Scraped daily financial news & catalyst pressure engine
 │       ├── routers/
 │       │   ├── system.py      # /api/status, /api/system/pause, /api/system/shutdown
-│       │   ├── symbols.py     # /api/symbols, /api/symbols/custom, /api/symbols/sync
+│       │   ├── symbols.py     # /api/symbols, /api/symbols/chart, /api/symbols/news
 │       │   └── watchlist.py   # /api/watchlist, /api/snapshot
 │       └── providers/
 │           ├── base.py        # DataProvider abstract base class (Adapter Pattern)
-│           ├── tradingview.py # TradingView WebSocket feed (Socket.IO framing)
-│           ├── egxapi.py      # egxapi.com adapter
-│           └── mock_snapshot.py # Realistic closing snapshot fallback
+│           └── tradingview.py # Dual-engine TradingView Scanner & WebSocket streaming
 └── frontend/
     ├── index.html             # Terminal frame with JetBrains Mono font
     ├── vite.config.js         # Single-port integration settings
     ├── tailwind.config.js     # Dark terminal palette & flash animations
     └── src/
-        ├── App.jsx            # Master dashboard & shutdown overlay
+        ├── App.jsx            # Master dashboard & modal orchestration
         ├── hooks/
         │   └── useEGXWebSocket.js # Auto-reconnecting WebSocket hook
         ├── components/
         │   ├── Header.jsx     # Terminal branding, clock, pause & exit controls
-        │   ├── IndexCards.jsx # 4 pinned benchmark cards
+        │   ├── IndexCards.jsx # 4 pinned benchmark cards with sparklines
         │   ├── WatchlistTable.jsx # Watchlist table with sorting & cell flashes
+        │   ├── StockDetailModal.jsx # Multi-timeframe interactive chart & news catalysts
         │   ├── StockSearchModal.jsx # Instant search with custom IPO ticker addition
         │   └── MarketStatusBadge.jsx # Market session status pill
         └── utils/

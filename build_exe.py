@@ -89,6 +89,8 @@ def package_executable():
         "--hidden-import=app.services.symbol_sync",
         "--hidden-import=app.services.stream_manager",
         "--hidden-import=app.services.technical_sentiment",
+        "--hidden-import=app.services.historical_chart",
+        "--hidden-import=app.services.market_news",
         "--hidden-import=app.routers",
         "--hidden-import=app.routers.system",
         "--hidden-import=app.routers.symbols",

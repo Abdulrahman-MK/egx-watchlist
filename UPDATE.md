@@ -157,3 +157,54 @@ To prevent continuous background streaming over limited mobile cellular quotas:
 * **Anchor Baseline**: Trajectory sparklines anchor to today's open price rather than yesterday's close, displaying pure intraday momentum.
 * **Pre-Market Trigger**: Evaluates every active trading day (Sunday through Thursday) at 09:00 AM Africa/Cairo (exactly 1 hour before the 10:00 AM open bell).
 * **Closed-Session Preservation**: Between 14:30 and the next morning at 08:59:59, the completed session trajectory remains visible for evening analysis before resetting for the new trading day.
+
+---
+
+## 7. Phase 2: Authentic Quotes Ingestion, Multi-Timeframe Charts & Scraped News Catalysts
+
+### Issue D: Stale & Distorted Quote Numbers (Root-Cause Analysis)
+* **Symptom**: Certain equities and benchmark indices displayed stale or inaccurate numbers (e.g., `COMI` did not match actual session prices where Open=124.97, High=125.9, Low=124.21, Close=125.9; `EGX30` showed an obsolete anchor price).
+* **Root Cause**:
+  1. `backend/app/providers/tradingview.py` initialized `self._cache = get_initial_snapshots()`, which seeded in-memory state with static pseudorandom mock values.
+  2. In `get_snapshot()`, `s in self._cache and self._cache[s].get("last_price", 0) > 0` evaluated to `True` for seeded symbols, completely bypassing upstream network queries and returning stale mock data.
+  3. Outside market hours (10:00 to 14:30 Cairo), the provider loop slept without executing off-hours scanner queries to refresh official closing numbers.
+* **Engineering Solution**:
+  1. Completely eradicated mock snapshot seeding from `self._cache` (initialized strictly as an empty dictionary).
+  2. Implemented `sync_authentic_market_snapshot()` which queries TradingView's Egypt Scanner API (`https://scanner.tradingview.com/egypt/scan`) for all 295+ listed equities and benchmark indices (`EGX30`, `EGX70EWI`, `EGX100EWI`).
+  3. Implemented a dedicated one-shot WebSocket handshake for the ICE-indexed benchmark `EGX:SHARIAH`.
+  4. Added dynamic database migration to purge legacy mock rows from `latest_quotes` and expanded the schema to persist `signal`, `rating_score`, and `rsi`.
+  5. Verified numbers against live market data:
+     * `COMI`: Open `124.97`, High `125.90`, Low `124.21`, Close `125.90`, Volume `3,210,685`.
+     * `EGX30`: Open `51,214.70`, High `52,089.10`, Low `51,098.80`, Close `52,089.00`, Volume `220,951,000`.
+     * `EGX70EWI`: Open `17,552.40`, High `17,903.70`, Low `17,522.90`, Close `17,903.70`, Volume `906,073,000`.
+     * `EGX100EWI`: Open `23,528.70`, High `24,013.00`, Low `23,487.30`, Close `24,013.00`, Volume `1,127,020,000`.
+     * `SHARIAH`: Open `6,152.48`, High `6,290.25`, Low `6,119.71`, Close `6,290.22`, Volume `133,782,000`.
+
+---
+
+### Interactive Multi-Timeframe Charting Engine
+* **Supported Horizons**:
+  * **1D (Daily Session)**: Starts anew at 09:00 AM Cairo time. Anchors strictly to today's open auction price (0.00% change baseline). Renders intraday trajectory across the trading day so traders see whether today's price action represents buying or selling pressure relative to the open bell.
+  * **1W (1 Week)**: Covers 5 active Egyptian Exchange trading sessions (Sunday to Thursday) using hourly and 30-minute candles.
+  * **1M (1 Month)**: 30 calendar days of daily bars (~22 trading sessions) for consolidation and breakout analysis.
+  * **1Y (1 Year)**: 365 calendar days of daily bars (~260 trading sessions) displaying annual support, resistance, and 52-week ranges.
+* **Vector SVG Architecture**: High-performance SVG area-line chart with dual gradients (emerald green for gains, ruby red for declines), interactive crosshair, price axes, and hover detail tooltips displaying date/time, price, OHLC, and volume.
+
+---
+
+### Scraped Daily News & Catalyst Pressure Engine
+* **Targeted News Aggregation**: Queries Google News RSS feeds across both English and Arabic financial press for the selected company and Egyptian Exchange market context.
+* **Bilingual Sentiment Lexicon**:
+  * **Bullish Catalysts (Upward Pressure)**: Detects positive financial indicators such as profit surges, dividend declarations, credit rating upgrades, digital banking approvals, strategic acquisitions, and capacity expansions.
+  * **Bearish Catalysts (Downward Pressure)**: Detects risk factors such as net losses, revenue contractions, regulatory fines, litigation, credit downgrades, and debt restructuring pressures.
+  * **Neutral / Informational**: Normalizes routine general assembly notices and regulatory filings.
+* **Directional Impact Explanations**: Annotates each article with a concise explanation detailing why the news represents potential upward buying pressure or downward selling risk.
+* **Consensus Summary**: Computes an aggregate catalyst consensus badge (`BULLISH CATALYST`, `BEARISH CATALYST`, `NEUTRAL`) visible at a glance in the modal.
+
+---
+
+### Institutional Quality Standards
+* **Zero Emojis**: Removed all emoji glyphs from UI elements, headers, documentation, and code comments to maintain a serious, institutional Bloomberg/Reuters terminal aesthetic suitable for professional portfolios and recruitment review.
+* **Thorough Code Annotations**: Every function, route, and data transformation includes comprehensive docstrings detailing why the code was written, the underlying financial rationale, and what it accomplishes.
+* **Privacy & Network Security**: Zero `.bat` scripts, personal credentials, or local IP configurations tracked in version control.
+

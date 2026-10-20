@@ -116,3 +116,37 @@ async def get_symbol_trajectory(ticker: str):
     clean = normalize_ticker(ticker)
     history = await get_session_intraday_history(clean)
     return {"ticker": clean, "points": history}
+
+
+@router.get("/chart/{ticker}")
+async def get_symbol_chart(
+    ticker: str,
+    timeframe: str = Query("1D", description="Timeframe horizon: '1D', '1W', '1M', or '1Y'")
+):
+    """Retrieves multi-timeframe candlestick and series data for interactive modal charts.
+
+    Timeframe Horizons:
+    - 1D: Intraday session points starting anew each morning at the 09:00 AM Cairo reset.
+          Baseline is anchored strictly to today's open price.
+    - 1W: Past 5 active trading sessions with hourly/30-minute granularity.
+    - 1M: 30 calendar days of daily bars for medium-term trend evaluation.
+    - 1Y: 365 calendar days of daily bars for annual range and 52-week high/low support.
+    """
+    from app.services.historical_chart import get_symbol_chart_data
+    clean = normalize_ticker(ticker)
+    return await get_symbol_chart_data(clean, timeframe=timeframe)
+
+
+@router.get("/news/{ticker}")
+async def get_symbol_market_news(ticker: str):
+    """Retrieves scraped real-time financial news headlines and catalyst sentiment for a security.
+
+    Analyzes articles using a bilingual financial lexicon to determine directional catalyst impact:
+    - BULLISH_CATALYST: Positive earnings, strategic approvals, or expansions signaling upward pressure.
+    - BEARISH_CATALYST: Contraction, regulatory scrutiny, or debt pressure signaling downward risk.
+    - NEUTRAL: Routine disclosures and balanced market coverage.
+    """
+    from app.services.market_news import get_symbol_news
+    clean = normalize_ticker(ticker)
+    return await get_symbol_news(clean)
+

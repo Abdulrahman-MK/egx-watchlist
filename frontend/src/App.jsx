@@ -15,6 +15,7 @@ import { Header } from './components/Header';
 import { IndexCards } from './components/IndexCards';
 import { WatchlistTable } from './components/WatchlistTable';
 import { StockSearchModal } from './components/StockSearchModal';
+import { StockDetailModal } from './components/StockDetailModal';
 import { ShieldCheck, Info, Sparkles, CheckCircle2, XCircle } from 'lucide-react';
 
 export function App() {
@@ -36,6 +37,7 @@ export function App() {
   } = useEGXWebSocket();
 
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [selectedStock, setSelectedStock] = useState(null);
   const [toast, setToast] = useState(null);
 
   const showToast = (message, type = 'info') => {
@@ -163,6 +165,7 @@ export function App() {
           <IndexCards
             indices={indices}
             flashStates={flashStates}
+            onSelectIndex={setSelectedStock}
           />
         </div>
 
@@ -174,6 +177,7 @@ export function App() {
             flashStates={flashStates}
             onRemove={handleRemoveStock}
             onOpenSearch={() => setIsSearchOpen(true)}
+            onSelectStock={setSelectedStock}
           />
         </div>
 
@@ -201,6 +205,15 @@ export function App() {
         onAddCustomTicker={handleAddCustomTicker}
         onRemoveStock={handleRemoveStock}
       />
+
+      {/* Interactive Stock Detail Modal with Multi-Timeframe Charts & News Catalysts */}
+      {selectedStock && (
+        <StockDetailModal
+          ticker={selectedStock}
+          quotes={quotes}
+          onClose={() => setSelectedStock(null)}
+        />
+      )}
 
       {/* Toast Notification */}
       {toast && (

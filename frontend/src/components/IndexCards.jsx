@@ -83,7 +83,7 @@ function IntradaySparkline({ open, low, high, close, isPositive }) {
   );
 }
 
-export function IndexCards({ indices, flashStates }) {
+export function IndexCards({ indices, flashStates, onSelectIndex }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
       {PINNED_INDEX_KEYS.map((item) => {
@@ -111,7 +111,9 @@ export function IndexCards({ indices, flashStates }) {
         return (
           <div
             key={item.key}
-            className={`relative p-4 rounded-xl bg-terminal-card border transition-all duration-300 shadow-sm overflow-hidden flex flex-col justify-between ${flashClass}`}
+            onClick={() => onSelectIndex && onSelectIndex(item.key)}
+            title={`Click to view ${item.label} multi-timeframe chart and market catalysts`}
+            className={`relative p-4 rounded-xl bg-terminal-card border transition-all duration-300 shadow-sm overflow-hidden flex flex-col justify-between cursor-pointer hover:border-sky-500/50 active:scale-[0.99] ${flashClass}`}
           >
             {/* Header / Titles */}
             <div>

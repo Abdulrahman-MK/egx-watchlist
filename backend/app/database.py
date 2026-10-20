@@ -79,10 +79,24 @@ async def init_db() -> None:
                 change REAL NOT NULL,
                 change_pct REAL NOT NULL,
                 volume INTEGER DEFAULT 0,
+                signal TEXT DEFAULT 'NEUTRAL',
+                rating_score REAL DEFAULT 0.0,
+                rsi REAL,
                 updated_at TEXT NOT NULL,
                 session_date TEXT NOT NULL
             )
         """)
+
+        # Dynamic schema upgrade for existing database instances
+        for col_name, col_type in [
+            ("signal", "TEXT DEFAULT 'NEUTRAL'"),
+            ("rating_score", "REAL DEFAULT 0.0"),
+            ("rsi", "REAL"),
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE latest_quotes ADD COLUMN {col_name} {col_type}")
+            except Exception:
+                pass
 
         # 4. Historical time-series table for session sparklines, prediction models, and analytics
         await db.execute("""
@@ -110,6 +124,12 @@ async def init_db() -> None:
                 last_reset_date TEXT NOT NULL,
                 reset_timestamp TEXT NOT NULL
             )
+        """)
+
+        # 6. Purge legacy mock quote entries
+        await db.execute("""
+            DELETE FROM latest_quotes
+            WHERE last_price IN (52273.3, 18481.5, 24607.4, 6378.9)
         """)
 
         await db.commit()
@@ -403,14 +423,18 @@ async def save_quote_to_db(quote: Dict[str, Any]) -> None:
     updated_at = quote.get("updated_at", "")
     session_date = updated_at[:10] if len(updated_at) >= 10 else ""
 
+    signal = quote.get("signal", "NEUTRAL")
+    rating_score = float(quote.get("rating_score", 0.0))
+    rsi = float(quote.get("rsi")) if quote.get("rsi") is not None else None
+
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
             INSERT INTO latest_quotes (
                 ticker, tv_symbol, name_en, name_ar, is_index, sector, sector_ar,
                 currency, last_price, prev_close, open_price, high_price, low_price,
-                change, change_pct, volume, updated_at, session_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                change, change_pct, volume, signal, rating_score, rsi, updated_at, session_date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ticker) DO UPDATE SET
                 tv_symbol = excluded.tv_symbol,
                 name_en = excluded.name_en,
@@ -424,13 +448,16 @@ async def save_quote_to_db(quote: Dict[str, Any]) -> None:
                 change = excluded.change,
                 change_pct = excluded.change_pct,
                 volume = excluded.volume,
+                signal = excluded.signal,
+                rating_score = excluded.rating_score,
+                rsi = excluded.rsi,
                 updated_at = excluded.updated_at,
                 session_date = excluded.session_date
             """,
             (
                 ticker, tv_sym, name_en, name_ar, is_index, sector, sector_ar,
                 currency, last_price, prev_close, open_price, high_price, low_price,
-                change, change_pct, volume, updated_at, session_date
+                change, change_pct, volume, signal, rating_score, rsi, updated_at, session_date
             ),
         )
 
@@ -500,6 +527,9 @@ async def get_cached_quotes_from_db(tickers: Optional[List[str]] = None) -> Dict
                     "change": d["change"],
                     "change_pct": d["change_pct"],
                     "volume": d["volume"],
+                    "signal": d.get("signal", "NEUTRAL") or "NEUTRAL",
+                    "rating_score": d.get("rating_score", 0.0) or 0.0,
+                    "rsi": d.get("rsi"),
                     "updated_at": d["updated_at"],
                 }
         return result

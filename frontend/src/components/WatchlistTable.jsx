@@ -8,6 +8,7 @@ export function WatchlistTable({
   flashStates,
   onRemove,
   onOpenSearch,
+  onSelectStock,
 }) {
   const [sortField, setSortField] = useState('ticker');
   const [sortOrder, setSortOrder] = useState('asc'); // 'asc' | 'desc'
@@ -242,7 +243,9 @@ export function WatchlistTable({
                 return (
                   <tr
                     key={row.ticker}
-                    className="hover:bg-terminal-cardHover/70 transition-colors group"
+                    onClick={() => onSelectStock && onSelectStock(row.ticker)}
+                    title={`Click to inspect ${row.ticker} multi-timeframe charts and news catalysts`}
+                    className="hover:bg-terminal-cardHover/70 active:bg-slate-800/80 transition-colors group cursor-pointer"
                   >
                     {/* Ticker */}
                     <td className="py-3 px-4 font-bold text-slate-100 flex items-center gap-2">
@@ -368,9 +371,12 @@ export function WatchlistTable({
                     </td>
 
                     {/* Remove Action */}
-                    <td className="py-3 px-3 text-center">
+                    <td className="py-3 px-3 text-center" onClick={(e) => e.stopPropagation()}>
                       <button
-                        onClick={() => onRemove(row.ticker)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRemove(row.ticker);
+                        }}
                         title={`Remove ${row.ticker} from watchlist`}
                         className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors opacity-70 group-hover:opacity-100"
                       >
