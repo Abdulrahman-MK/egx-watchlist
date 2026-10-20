@@ -53,6 +53,8 @@ def package_executable():
     dist_data_arg = f"{str(FRONTEND_DIST)};dist"
     backend_data_arg = f"{str(BACKEND_DIR)};backend"
     icon_path = str(PROJECT_ROOT / "app.ico")
+    dist_dir = str(PROJECT_ROOT / "dist")
+    work_dir = str(PROJECT_ROOT / "build")
 
     args = [
         launcher_script,
@@ -60,6 +62,9 @@ def package_executable():
         "--onefile",
         "--windowed",  # Suppress command prompt window
         f"--icon={icon_path}",
+        f"--distpath={dist_dir}",
+        f"--workpath={work_dir}",
+        f"--specpath={str(PROJECT_ROOT)}",
         f"--add-data={dist_data_arg}",
         f"--add-data={backend_data_arg}",
         f"--paths={str(BACKEND_DIR)}",
