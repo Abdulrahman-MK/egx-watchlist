@@ -41,6 +41,7 @@ export function StockDetailModal({ ticker, onClose, quotes = {} }) {
   const [newsData, setNewsData] = useState(null);
   const [newsLoading, setNewsLoading] = useState(true);
   const [hoverIndex, setHoverIndex] = useState(null);
+  const svgRef = useRef(null);
 
   const quote = quotes[ticker] || {};
 
@@ -117,6 +118,48 @@ export function StockDetailModal({ ticker, onClose, quotes = {} }) {
   const candles = chartData?.candles || [];
   const activePoint = hoverIndex !== null && candles[hoverIndex] ? candles[hoverIndex] : null;
 
+  // Pointer & Touch Movement Handler (Mathematical 1:1 SVG User-Space Coordinate Mapping)
+  const updateHoverIndex = (clientX, clientY) => {
+    if (!svgRef.current || !chartGeometry || candles.length === 0) return;
+    const svg = svgRef.current;
+    let svgX = null;
+
+    // Utilize getScreenCTM() to invert DOM screen space into exact SVG internal viewBox space.
+    // This eliminates any aspect ratio letterboxing, display scaling, or container margin distortions.
+    const ctm = svg.getScreenCTM();
+    if (ctm) {
+      const pt = svg.createSVGPoint();
+      pt.x = clientX;
+      pt.y = clientY;
+      const transformed = pt.matrixTransform(ctm.inverse());
+      svgX = transformed.x;
+    } else {
+      const rect = svg.getBoundingClientRect();
+      svgX = ((clientX - rect.left) / rect.width) * chartGeometry.width;
+    }
+
+    if (svgX !== null) {
+      const minX = chartGeometry.padding.left;
+      const maxX = chartGeometry.width - chartGeometry.padding.right;
+      const clampedX = Math.max(minX, Math.min(maxX, svgX));
+      const pct = (clampedX - minX) / chartGeometry.plotW;
+      const idx = Math.round(pct * (candles.length - 1));
+      if (idx >= 0 && idx < candles.length) {
+        setHoverIndex(idx);
+      }
+    }
+  };
+
+  const handleMouseMove = (e) => {
+    updateHoverIndex(e.clientX, e.clientY);
+  };
+
+  const handleTouchMove = (e) => {
+    if (e.touches && e.touches.length > 0) {
+      updateHoverIndex(e.touches[0].clientX, e.touches[0].clientY);
+    }
+  };
+
   // SVG Chart Geometry Calculations
   const chartGeometry = useMemo(() => {
     if (!candles || candles.length === 0) return null;
@@ -138,6 +181,9 @@ export function StockDetailModal({ ticker, onClose, quotes = {} }) {
     const priceRange = maxPrice - minPrice || 1.0;
     minPrice = minPrice - priceRange * 0.03;
     maxPrice = maxPrice + priceRange * 0.03;
+
+    // Retain thousandths precision for small-cap equities (< 20 EGP)
+    const priceDecimals = minPrice < 20 ? 3 : 2;
 
     const getX = (idx) => {
       if (candles.length === 1) return padding.left + plotW / 2;
@@ -175,6 +221,7 @@ export function StockDetailModal({ ticker, onClose, quotes = {} }) {
       plotH,
       minPrice,
       maxPrice,
+      priceDecimals,
       getX,
       getY,
       linePath,
@@ -223,7 +270,7 @@ export function StockDetailModal({ ticker, onClose, quotes = {} }) {
               </div>
               <div className="flex items-center justify-end gap-1.5 text-xs font-mono font-semibold">
                 <span className={isPositive ? 'text-emerald-400' : 'text-rose-400'}>
-                  {isPositive ? '+' : ''}{delta.toFixed(2)} ({isPositive ? '+' : ''}{deltaPct.toFixed(2)}%)
+                  {isPositive ? '+' : ''}{delta.toFixed(currentPrice < 20 ? 3 : 2)} ({isPositive ? '+' : ''}{deltaPct.toFixed(2)}%)
                 </span>
                 <span className="text-[10px] text-terminal-muted font-normal">
                   ({timeframe === '1D' ? 'Session' : timeframe})
@@ -335,20 +382,15 @@ export function StockDetailModal({ ticker, onClose, quotes = {} }) {
                 ) : chartGeometry ? (
                   <div className="w-full overflow-x-auto">
                     <svg
+                      ref={svgRef}
                       viewBox={`0 0 ${chartGeometry.width} ${chartGeometry.height}`}
-                      className="w-full h-64 select-none"
+                      preserveAspectRatio="none"
+                      className="w-full h-64 select-none cursor-crosshair touch-none"
                       onMouseLeave={() => setHoverIndex(null)}
-                      onMouseMove={(e) => {
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        const clientX = e.clientX - rect.left;
-                        const svgX = (clientX / rect.width) * chartGeometry.width;
-                        const clampedX = Math.max(chartGeometry.padding.left, Math.min(chartGeometry.width - chartGeometry.padding.right, svgX));
-                        const pct = (clampedX - chartGeometry.padding.left) / chartGeometry.plotW;
-                        const idx = Math.round(pct * (candles.length - 1));
-                        if (idx >= 0 && idx < candles.length) {
-                          setHoverIndex(idx);
-                        }
-                      }}
+                      onMouseMove={handleMouseMove}
+                      onTouchStart={handleTouchMove}
+                      onTouchMove={handleTouchMove}
+                      onTouchEnd={() => setHoverIndex(null)}
                     >
                       <defs>
                         <linearGradient id="chartGradientGreen" x1="0" y1="0" x2="0" y2="1">
@@ -381,7 +423,7 @@ export function StockDetailModal({ ticker, onClose, quotes = {} }) {
                             fontSize="10"
                             fontFamily="monospace"
                           >
-                            {tick.price.toFixed(2)}
+                            {tick.price.toFixed(chartGeometry.priceDecimals)}
                           </text>
                         </g>
                       ))}
@@ -450,7 +492,11 @@ export function StockDetailModal({ ticker, onClose, quotes = {} }) {
 
                 {/* Hover Details Panel */}
                 {activePoint && (
-                  <div className="absolute top-3 left-4 bg-slate-900/90 border border-slate-700/80 rounded-lg p-2.5 shadow-xl text-xs font-mono space-y-1 pointer-events-none">
+                  <div
+                    className={`absolute top-3 ${
+                      hoverIndex !== null && hoverIndex > candles.length / 2 ? 'left-4' : 'right-4'
+                    } bg-slate-900/95 border border-slate-700/80 rounded-lg p-2.5 shadow-xl text-xs font-mono space-y-1 pointer-events-none transition-all duration-75`}
+                  >
                     <div className="text-slate-400 text-[11px]">
                       {timeframe === '1D'
                         ? new Date(activePoint.time * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })

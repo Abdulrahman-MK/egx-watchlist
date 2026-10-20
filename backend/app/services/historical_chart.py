@@ -53,6 +53,25 @@ CACHE_TTL_INTRADAY = 60.0    # 1 minute for 1D intraday charts
 CACHE_TTL_HISTORICAL = 300.0 # 5 minutes for 1W, 1M, 1Y
 
 
+def preserve_precision(val: Any, default: float = 0.0) -> float:
+    """Preserves authentic market precision (thousandths and ten-thousandths) for small equities.
+
+    Financial Rationale:
+    Small-cap and penny securities on the Egyptian Exchange (e.g. COPR trading around 0.439 EGP)
+    fluctuate in fractions of a piastre. Rounding to hundredths collapses distinct price movements
+    into square steps, hiding genuine trends and misleading real-time buy decisions.
+    """
+    if val is None:
+        return default
+    try:
+        f = float(val)
+        if abs(f) < 20.0:
+            return round(f, 4)
+        return round(f, 2)
+    except (ValueError, TypeError):
+        return default
+
+
 def _to_tv_symbol(ticker: str) -> str:
     """Converts internal ticker to TradingView symbol identifier."""
     clean = normalize_ticker(ticker)
@@ -151,10 +170,10 @@ async def fetch_tv_candles(tv_symbol: str, resolution: str, count: int) -> List[
                                 if len(v) >= 6:
                                     candles.append({
                                         "time": int(v[0]),
-                                        "open": round(float(v[1]), 2),
-                                        "high": round(float(v[2]), 2),
-                                        "low": round(float(v[3]), 2),
-                                        "close": round(float(v[4]), 2),
+                                        "open": preserve_precision(v[1]),
+                                        "high": preserve_precision(v[2]),
+                                        "low": preserve_precision(v[3]),
+                                        "close": preserve_precision(v[4]),
                                         "volume": int(v[5]),
                                     })
                             return candles
@@ -267,7 +286,7 @@ async def get_symbol_chart_data(ticker: str, timeframe: str = "1D") -> Dict[str,
             ]
 
         # Calculate session delta relative to today's open price
-        delta = round(current_price - anchor_price, 2)
+        delta = preserve_precision(current_price - anchor_price)
         delta_pct = round((delta / anchor_price) * 100, 2) if anchor_price > 0 else 0.0
 
     # -------------------------------------------------------------
@@ -282,8 +301,8 @@ async def get_symbol_chart_data(ticker: str, timeframe: str = "1D") -> Dict[str,
             tv_daily = await fetch_tv_candles(tv_sym, resolution="D", count=7)
             candles = tv_daily[-5:] if tv_daily else []
 
-        anchor_price = candles[0]["open"] if candles else current_price
-        delta = round(current_price - anchor_price, 2)
+        anchor_price = preserve_precision(candles[0]["open"]) if candles else current_price
+        delta = preserve_precision(current_price - anchor_price)
         delta_pct = round((delta / anchor_price) * 100, 2) if anchor_price > 0 else 0.0
 
     # -------------------------------------------------------------
@@ -292,8 +311,8 @@ async def get_symbol_chart_data(ticker: str, timeframe: str = "1D") -> Dict[str,
     elif tf == "1M":
         tv_bars = await fetch_tv_candles(tv_sym, resolution="D", count=30)
         candles = tv_bars if tv_bars else []
-        anchor_price = candles[0]["open"] if candles else current_price
-        delta = round(current_price - anchor_price, 2)
+        anchor_price = preserve_precision(candles[0]["open"]) if candles else current_price
+        delta = preserve_precision(current_price - anchor_price)
         delta_pct = round((delta / anchor_price) * 100, 2) if anchor_price > 0 else 0.0
 
     # -------------------------------------------------------------
@@ -302,8 +321,8 @@ async def get_symbol_chart_data(ticker: str, timeframe: str = "1D") -> Dict[str,
     elif tf == "1Y":
         tv_bars = await fetch_tv_candles(tv_sym, resolution="D", count=260)
         candles = tv_bars if tv_bars else []
-        anchor_price = candles[0]["open"] if candles else current_price
-        delta = round(current_price - anchor_price, 2)
+        anchor_price = preserve_precision(candles[0]["open"]) if candles else current_price
+        delta = preserve_precision(current_price - anchor_price)
         delta_pct = round((delta / anchor_price) * 100, 2) if anchor_price > 0 else 0.0
 
     # Calculate overall high and low bounds for the chosen timeframe

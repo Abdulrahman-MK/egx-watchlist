@@ -46,6 +46,26 @@ TV_USER_AGENT = (
 )
 
 
+def preserve_precision(val: Any, default: float = 0.0) -> float:
+    """Preserves authentic market precision (thousandths and ten-thousandths) for small equities.
+
+    Financial Rationale:
+    Egyptian Exchange equities with share prices below 20 EGP trade in milliemes / thousandths
+    (tick size 0.001 EGP, e.g., COPR at 0.439). Rounding to the nearest hundredth truncates
+    real transaction data, distorts chart trends into staircase boxes, and masks critical price movement.
+    """
+    if val is None:
+        return default
+    try:
+        f = float(val)
+        if abs(f) < 20.0:
+            return round(f, 4)
+        return round(f, 2)
+    except (ValueError, TypeError):
+        return default
+
+
+
 class TradingViewWebSocketProvider(DataProvider):
     """Adapter for TradingView's live quote streaming WebSocket and Scanner API.
 
@@ -318,15 +338,15 @@ class TradingViewWebSocketProvider(DataProvider):
         vol = int(d[8]) if d[8] is not None else 0
         rec_all = float(d[9]) if (len(d) > 9 and d[9] is not None) else None
         rsi_val = float(d[10]) if (len(d) > 10 and d[10] is not None) else None
-        prev_p = round(close_p - ch_abs, 2) if ch_abs is not None else close_p
+        prev_p = preserve_precision(close_p - ch_abs) if ch_abs is not None else close_p
 
         values = {
-            "lp": close_p,
-            "ch": ch_abs,
+            "lp": preserve_precision(close_p),
+            "ch": preserve_precision(ch_abs),
             "chp": ch_pct,
-            "high_price": hi_p,
-            "low_price": lo_p,
-            "open_price": op_p,
+            "high_price": preserve_precision(hi_p),
+            "low_price": preserve_precision(lo_p),
+            "open_price": preserve_precision(op_p),
             "volume": vol,
             "prev_close_price": prev_p,
             "recommend_all": rec_all,
@@ -627,7 +647,7 @@ class TradingViewWebSocketProvider(DataProvider):
         volume = values.get("volume", existing.get("volume", 0))
 
         if change == 0.0 and prev_close and last_price != prev_close:
-            change = round(last_price - prev_close, 2)
+            change = preserve_precision(last_price - prev_close)
             change_pct = round((change / prev_close) * 100, 2)
 
         now_cairo = get_cairo_now()
@@ -665,13 +685,13 @@ class TradingViewWebSocketProvider(DataProvider):
             "sector": sector,
             "sector_ar": sector_ar,
             "currency": existing.get("currency") or meta.get("currency", "EGP"),
-            "last_price": round(float(last_price), 2),
-            "prev_close": round(float(prev_close), 2),
-            "change": round(float(change), 2),
+            "last_price": preserve_precision(last_price),
+            "prev_close": preserve_precision(prev_close),
+            "change": preserve_precision(change),
             "change_pct": round(float(change_pct), 2),
-            "high": round(float(high_price), 2),
-            "low": round(float(low_price), 2),
-            "open": round(float(open_price), 2),
+            "high": preserve_precision(high_price),
+            "low": preserve_precision(low_price),
+            "open": preserve_precision(open_price),
             "volume": int(volume),
             "signal": signal,
             "rating_score": rating_score,

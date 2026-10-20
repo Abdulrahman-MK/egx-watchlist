@@ -208,3 +208,44 @@ To prevent continuous background streaming over limited mobile cellular quotas:
 * **Thorough Code Annotations**: Every function, route, and data transformation includes comprehensive docstrings detailing why the code was written, the underlying financial rationale, and what it accomplishes.
 * **Privacy & Network Security**: Zero `.bat` scripts, personal credentials, or local IP configurations tracked in version control.
 
+---
+
+## 8. Precision Calibration & Exact SVG Crosshair Tracking
+
+### Issue E: Premature Rounding on Low-Priced Equities (Step-Square Curves)
+* **Symptom**: Equities trading below 1 EGP (such as `COPR` trading at `0.439` EGP with `0.437` low and `0.445` high) were displayed as flat step-stair squares alternating only between `0.44` and `0.45`. Changes of `-0.001` were truncated to `0.00`.
+* **Underlying Mechanism**:
+  * In `backend/app/providers/tradingview.py` and `backend/app/services/historical_chart.py`, candle values and quote updates were clamped via `round(price, 2)`.
+  * For low-priced securities, 1 piastre (0.01 EGP) represents a massive ~2.3% fluctuation. Truncating thousandths (`0.001 EGP`) flattened real transaction swings into identical hundredths, masking genuine micro-trends.
+* **Engineering Solution**:
+  * Implemented `preserve_precision()` in both data ingestion and charting layers. Retains thousandths (`0.001 EGP`) and ten-thousandths (`0.0001 EGP`) for securities below 20 EGP.
+  * Enhanced `frontend/src/utils/formatters.js`:
+    * `formatPrice`: Automatically formats penny stocks in thousandths (e.g. `0.439` EGP) and displays 4 decimals if active.
+    * `formatChange`: Formats sub-unit nominal changes with 3 decimals (e.g. `-0.001`), ensuring traders observe exact price spreads.
+  * Y-axis chart ticks dynamically switch to 3 decimal places (`0.437`, `0.441`, `0.445`, `0.450`), rendering a fluid, natural price trajectory.
+
+---
+
+### Issue F: Graph Hover Crosshair Misalignment at Session End
+* **Symptom**: Hovering near the right edge of the chart (e.g. 13:45 or 14:30) required moving the mouse cursor outside the graph box to the right. On mobile touchscreens, dragging caused missed times and erratic tracking.
+* **Underlying Mechanism**:
+  * The `<svg>` element was styled with `w-full h-64` inside an 840px modal container while its `viewBox` was `0 0 680 240`.
+  * By default, browsers enforce `preserveAspectRatio="xMidYMid meet"`, letterboxing the content horizontally by ~57px on both left and right sides.
+  * Calculating coordinates via `(e.clientX - rect.left) / rect.width` mapped the cursor to the outer DOM bounding box rather than the SVG's internal coordinate grid. At the far right, this created an offset of over 50 pixels.
+* **Engineering Solution**:
+  * Inverted DOM screen coordinates directly into SVG viewBox space using native `svg.getScreenCTM().inverse()`.
+    ```javascript
+    const ctm = svg.getScreenCTM();
+    if (ctm) {
+      const pt = svg.createSVGPoint();
+      pt.x = clientX;
+      pt.y = clientY;
+      const svgPt = pt.matrixTransform(ctm.inverse());
+      svgX = svgPt.x; // Exact pixel match inside the viewBox
+    }
+    ```
+  * Added `preserveAspectRatio="none"` and `cursor-crosshair touch-none`.
+  * Added mobile touch event handlers (`onTouchStart`, `onTouchMove`, `onTouchEnd`) so mobile and tablet users can drag their thumb smoothly across candles without triggering browser scroll.
+  * Implemented dynamic tooltip positioning: flips horizontally based on cursor position to never obscure the active candle or the user's finger.
+
+
