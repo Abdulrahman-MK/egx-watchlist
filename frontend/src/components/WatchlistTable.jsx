@@ -38,6 +38,9 @@ export function WatchlistTable({
         high: q.high !== undefined ? q.high : null,
         low: q.low !== undefined ? q.low : null,
         volume: q.volume || 0,
+        signal: q.signal || 'NEUTRAL',
+        rating_score: q.rating_score !== undefined ? q.rating_score : 0.0,
+        rsi: q.rsi || null,
         updated_at: q.updated_at || '',
       };
     });
@@ -136,6 +139,13 @@ export function WatchlistTable({
                 <div className="flex items-center gap-1.5">
                   <span>Company Name</span>
                   {renderSortIcon('name_en')}
+                </div>
+              </th>
+
+              <th className="py-3 px-3 text-center group cursor-pointer" onClick={() => handleSort('signal')}>
+                <div className="flex items-center justify-center gap-1.5">
+                  <span>Signal</span>
+                  {renderSortIcon('signal')}
                 </div>
               </th>
 
@@ -269,6 +279,22 @@ export function WatchlistTable({
                           <div className="text-[10px] text-terminal-muted">{row.sector_ar || row.sector}</div>
                         </div>
                       )}
+                    </td>
+
+                    {/* Quantitative Signal Badge */}
+                    <td className="py-3 px-3 text-center font-mono">
+                      <span
+                        className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold tracking-wider ${
+                          row.signal === 'BULLISH'
+                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                            : row.signal === 'BEARISH'
+                            ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                            : 'bg-slate-800 text-slate-400 border border-slate-700/60'
+                        }`}
+                        title={row.rsi ? `RSI: ${row.rsi} | Rating: ${row.rating_score}` : `Rating: ${row.rating_score}`}
+                      >
+                        {row.signal}
+                      </span>
                     </td>
 
                     {/* Last Price (with Flash Highlight) */}

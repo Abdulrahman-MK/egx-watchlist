@@ -138,9 +138,16 @@ class StreamManager:
         loop.call_later(0.5, terminate_process)
 
     async def _market_heartbeat_loop(self) -> None:
-        """Periodically broadcasts market clock & session updates every 10 seconds."""
+        """Periodically broadcasts market clock & session updates every 10 seconds.
+        Also evaluates whether the daily 09:00 AM Cairo pre-market reset is due.
+        """
         while True:
             try:
+                # 1. Evaluate 09:00 AM Africa/Cairo pre-market session reset
+                from app.database import check_and_perform_daily_reset
+                await check_and_perform_daily_reset()
+
+                # 2. Check current Cairo session state and broadcast
                 m_status = check_market_hours()
                 await self.broadcast({
                     "type": "MARKET_STATUS",

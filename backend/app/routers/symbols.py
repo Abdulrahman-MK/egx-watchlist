@@ -59,3 +59,60 @@ async def trigger_symbol_sync():
     """Manually triggers a full synchronization scan against TradingView's Egypt Screener."""
     result = await sync_all_egx_symbols()
     return result
+
+
+@router.get("/technical/{ticker}")
+async def get_symbol_technical(ticker: str):
+    """Retrieves quantitative technical sentiment and momentum metrics for a specific stock.
+
+    Financial Metrics Included:
+    - Composite Rating Score (-1.0 to 1.0)
+    - Signal: BULLISH, BEARISH, or NEUTRAL
+    - 14-period RSI and Overbought/Oversold state
+    - MACD Line and Signal Line
+    - 20-period Exponential Moving Average (EMA20)
+    - 50-period Simple Moving Average (SMA50)
+    """
+    from app.services.technical_sentiment import get_cached_sentiment, load_cached_sentiment_from_db
+    clean = normalize_ticker(ticker)
+    sent = get_cached_sentiment(clean)
+    if not sent:
+        all_sent = await load_cached_sentiment_from_db()
+        sent = all_sent.get(clean)
+
+    if not sent:
+        # Fallback default neutral reading
+        return {
+            "ticker": clean,
+            "rating_score": 0.0,
+            "signal": "NEUTRAL",
+            "rsi": 50.0,
+            "rsi_signal": "NEUTRAL",
+            "macd": 0.0,
+            "macd_signal": 0.0,
+            "ema20": 0.0,
+            "sma50": 0.0,
+            "updated_at": "Offline / Fallback",
+        }
+    return sent
+
+
+@router.post("/technical/refresh")
+async def refresh_technical_sentiment():
+    """Manually triggers a fresh technical indicators calculation scan for all EGX securities."""
+    from app.services.technical_sentiment import fetch_technical_sentiment_bulk
+    data = await fetch_technical_sentiment_bulk()
+    return {"success": True, "count": len(data)}
+
+
+@router.get("/trajectory/{ticker}")
+async def get_symbol_trajectory(ticker: str):
+    """Retrieves intraday session trajectory points strictly for the active session.
+
+    Resets every trading day at 09:00 AM Cairo time (1 hour before market open),
+    anchoring the baseline to today's open price rather than yesterday's close.
+    """
+    from app.database import get_session_intraday_history
+    clean = normalize_ticker(ticker)
+    history = await get_session_intraday_history(clean)
+    return {"ticker": clean, "points": history}

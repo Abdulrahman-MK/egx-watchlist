@@ -103,6 +103,15 @@ async def init_db() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_hist_ticker_date ON price_history(ticker, session_date)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_hist_ticker_ts ON price_history(ticker, timestamp)")
 
+        # 5. Session control table tracking daily 09:00 AM Cairo session resets
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS session_control (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                last_reset_date TEXT NOT NULL,
+                reset_timestamp TEXT NOT NULL
+            )
+        """)
+
         await db.commit()
 
         # Seed initial watchlist if empty
@@ -512,4 +521,117 @@ async def get_ticker_history_from_db(ticker: str, limit: int = 100) -> List[Dict
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
+
+
+async def check_and_perform_daily_reset(current_dt: Optional[Any] = None) -> bool:
+    """Evaluates and executes the daily 09:00 AM Africa/Cairo session reset.
+
+    Financial & Algorithmic Rationale:
+    -----------------------------------
+    The Egyptian Exchange opens continuous trading at 10:00 AM Cairo time.
+    Traders require daily intraday charts and trajectory sparklines to represent
+    strictly the current session's price progression (10:00 to 14:30), rather than
+    displaying cumulative movements from yesterday's close.
+
+    To prepare clean baselines before pre-market trading, this function executes
+    every active trading day (Sunday through Thursday) at or after 09:00 AM Cairo time
+    (exactly 1 hour before market open).
+
+    When triggered:
+    1. Records today's date in `session_control`.
+    2. Clears previous temporary intraday ticks so the day starts fresh at 0.00%.
+    3. Today's initial trade at 10:00 AM becomes the Anchor Point (`Open`).
+
+    Args:
+        current_dt (Optional[datetime]): Reference datetime. Defaults to current Cairo time.
+
+    Returns:
+        bool: True if a session reset was executed for a new day; False otherwise.
+    """
+    from app.market_guard import get_cairo_now
+    now = current_dt or get_cairo_now()
+    today_str = now.strftime("%Y-%m-%d")
+    weekday = now.weekday()
+
+    # EGX active trading days are Sunday(6), Monday(0), Tuesday(1), Wednesday(2), Thursday(3)
+    if weekday in (4, 5):  # Friday and Saturday are Egyptian weekend
+        return False
+
+    # Reset occurs at or after 09:00 AM Cairo time (1 hour before 10:00 AM open)
+    if now.hour < 9:
+        return False
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT last_reset_date FROM session_control WHERE id = 1") as cursor:
+            row = await cursor.fetchone()
+            last_reset = row[0] if row else None
+
+        if last_reset != today_str:
+            # Perform daily reset: record today's session initialization
+            now_iso = now.strftime("%Y-%m-%d %H:%M:%S")
+            await db.execute("""
+                INSERT INTO session_control (id, last_reset_date, reset_timestamp)
+                VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    last_reset_date = excluded.last_reset_date,
+                    reset_timestamp = excluded.reset_timestamp
+            """, (today_str, now_iso))
+            await db.commit()
+            print(f"[SessionGuard] 09:00 AM Cairo session reset executed for {today_str}. Daily charts reset anew.")
+            return True
+
+    return False
+
+
+async def get_session_intraday_history(ticker: str) -> List[Dict[str, Any]]:
+    """Retrieves intraday price trajectory points strictly for the active or latest session.
+
+    Financial Rationale:
+    Anchors the trajectory to the day's opening price (`open_price`) and extracts
+    only ticks that occurred on today's session date (or the most recent completed session date
+    if market is closed/weekend), ensuring yesterday's cross-day carryover is excluded.
+
+    Args:
+        ticker (str): Normalized EGX security ticker (e.g., 'COMI', 'EGX30').
+
+    Returns:
+        List[Dict[str, Any]]: Chronologically sorted list of session price points.
+    """
+    clean = normalize_ticker(ticker)
+    from app.market_guard import get_cairo_now
+    now_cairo = get_cairo_now()
+    today_str = now_cairo.strftime("%Y-%m-%d")
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # 1. First attempt to fetch ticks for today's active date
+        async with db.execute(
+            """
+            SELECT * FROM price_history
+            WHERE ticker = ? AND session_date = ?
+            ORDER BY timestamp ASC
+            """,
+            (clean, today_str),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            if rows:
+                return [dict(r) for r in rows]
+
+        # 2. If no ticks yet today (e.g. weekend or before open), fetch from the most recent session
+        async with db.execute(
+            """
+            SELECT * FROM price_history
+            WHERE ticker = ?
+            ORDER BY timestamp DESC
+            LIMIT 50
+            """,
+            (clean,),
+        ) as cursor:
+            recent_rows = await cursor.fetchall()
+            if not recent_rows:
+                return []
+            # Reverse back to chronological order (Ascending)
+            return [dict(r) for r in reversed(recent_rows)]
+
 

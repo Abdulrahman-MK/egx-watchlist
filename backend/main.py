@@ -60,6 +60,10 @@ async def lifespan(app: FastAPI):
     # 4. Trigger background non-blocking dynamic symbol discovery from TradingView Egypt Scanner
     asyncio.create_task(sync_all_egx_symbols())
 
+    # 5. Trigger background technical sentiment calculation and caching (Bullish/Bearish ratings)
+    from app.services.technical_sentiment import fetch_technical_sentiment_bulk
+    asyncio.create_task(fetch_technical_sentiment_bulk())
+
     yield
 
     # Shutdown sequence

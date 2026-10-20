@@ -10,7 +10,7 @@ A local-only, high-performance financial terminal and real-time watchlist for th
 
 ---
 
-## ⚡ Highlights
+## Highlights
 
 - **Dynamic Full-EGX Symbol Discovery**: Queries TradingView's Egypt Scanner on startup to discover and cache all **~296+ listed EGX securities** across EGX 30, EGX 70, EGX 100, and recent IPOs (e.g. `ACTF`, `COPR`), paired with English and Arabic company names.
 - **Immediate Custom IPO Ticker Fallback**: Type any ticker in the search bar to immediately subscribe to `EGX:[INPUT]` even on its first day of listing.
@@ -25,7 +25,7 @@ A local-only, high-performance financial terminal and real-time watchlist for th
 
 ---
 
-## 📐 Architecture Blueprint
+## Architecture Blueprint
 
 For an in-depth breakdown of WebSocket framing, protocol heartbeats, and sequence diagrams, refer to [**`ARCHITECTURE.md`**](file:///ARCHITECTURE.md).
 
@@ -80,7 +80,7 @@ egx-watchlist/
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Option A: Desktop App Mode (Recommended)
 
@@ -118,7 +118,7 @@ Open **`http://localhost:5173`** in your browser with instant Vite HMR.
 
 ---
 
-## 📦 Packaging Standalone .EXE
+## Packaging Standalone Executable
 
 To package the entire tracker into a single executable:
 
@@ -134,7 +134,7 @@ You can move `EGX_Tracker.exe` anywhere on your Windows PC and launch it without
 
 ---
 
-## 🔒 Security & Safe Public GitHub Guidelines
+## Security & Architecture Guidelines
 
 - **Protected Secrets & Databases**: `.env` and `*.db` are strictly ignored in `.gitignore`.
 - **Local Isolation**: All network listeners are strictly bound to loopback `127.0.0.1`.
@@ -142,7 +142,7 @@ You can move `EGX_Tracker.exe` anywhere on your Windows PC and launch it without
 
 ---
 
-## ⚖️ Legal Disclaimer
+## Legal Disclaimer
 
 > [!IMPORTANT]
 > **Personal & Research Use Only**: This software is an open-source, local-only personal dashboard created for educational, research, and individual portfolio monitoring purposes. It connects directly from the user's local machine (`127.0.0.1`) to public quote interfaces.

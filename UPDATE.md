@@ -139,3 +139,21 @@ To prevent continuous background streaming over limited mobile cellular quotas:
 2. **Mobile Browser**: Navigated to host VPN IP via phone browser — verified full terminal UI renders with real-time quote updates.
 3. **Data Saver Test**: Locked phone screen and observed log activity; verified stream pause acknowledgment and immediate resumption upon unlock.
 4. **Clean Exit**: Closed desktop window on host machine; verified complete teardown of server processes with zero lingering ports.
+
+---
+
+## 6. Technical Sentiment Engine & 09:00 AM Cairo Session Reset
+
+### Quantitative Sentiment Classification
+* **Multi-Indicator Feed**: Integrates TradingView's 26-indicator composite technical score (`Recommend.All`), 14-period `RSI`, `MACD`, `EMA20`, and `SMA50`.
+* **Standardized Scoring**:
+  * Score >= +0.15: **BULLISH** (Upward trend / accumulation bias)
+  * Score <= -0.15: **BEARISH** (Downward trend / distribution bias)
+  * Between -0.15 and +0.15: **NEUTRAL** (Consolidation / equilibrium)
+* **Storage & Caching**: Persisted in SQLite `technical_sentiment` table for instant cold starts and offline resilience.
+* **Watchlist Column**: Renders institutional badges with hover tooltips detailing exact RSI readings and numerical scores.
+
+### Automated 09:00 AM Cairo Session Reset
+* **Anchor Baseline**: Trajectory sparklines anchor to today's open price rather than yesterday's close, displaying pure intraday momentum.
+* **Pre-Market Trigger**: Evaluates every active trading day (Sunday through Thursday) at 09:00 AM Africa/Cairo (exactly 1 hour before the 10:00 AM open bell).
+* **Closed-Session Preservation**: Between 14:30 and the next morning at 08:59:59, the completed session trajectory remains visible for evening analysis before resetting for the new trading day.

@@ -190,7 +190,10 @@ class TradingViewWebSocketProvider(DataProvider):
         tv_symbols = [self._to_tv_symbol(s) for s in symbols]
         payload = {
             "symbols": {"tickers": tv_symbols},
-            "columns": ["name", "description", "close", "change", "change_abs", "high", "low", "open", "volume"],
+            "columns": [
+                "name", "description", "close", "change", "change_abs",
+                "high", "low", "open", "volume", "Recommend.All", "RSI"
+            ],
         }
         headers = {
             "User-Agent": TV_USER_AGENT,
@@ -212,6 +215,8 @@ class TradingViewWebSocketProvider(DataProvider):
                             lo = d[6]
                             op = d[7]
                             vol = d[8]
+                            rec_all = d[9] if len(d) > 9 else None
+                            rsi_val = d[10] if len(d) > 10 else None
                             prev = (close_p - ch_abs) if (close_p is not None and ch_abs is not None) else close_p
                             v = {
                                 "lp": close_p,
@@ -222,6 +227,8 @@ class TradingViewWebSocketProvider(DataProvider):
                                 "open_price": op,
                                 "volume": vol,
                                 "prev_close_price": prev,
+                                "recommend_all": rec_all,
+                                "rsi": rsi_val,
                             }
                             await self._process_quote_update(s_name, v)
         except Exception as e:
@@ -490,6 +497,26 @@ class TradingViewWebSocketProvider(DataProvider):
 
         now_cairo = get_cairo_now()
 
+        # Quantitative sentiment resolution (Bullish, Bearish, Neutral)
+        # Pulls from TradingView Recommend.All score or background sentiment cache
+        from app.services.technical_sentiment import get_cached_sentiment, calculate_signal
+        sent = get_cached_sentiment(ticker)
+        rec_score = values.get("recommend_all")
+        if rec_score is None and sent:
+            rec_score = sent.get("rating_score")
+
+        if rec_score is not None:
+            signal = calculate_signal(rec_score)
+            rating_score = round(float(rec_score), 2)
+        elif sent:
+            signal = sent.get("signal", "NEUTRAL")
+            rating_score = sent.get("rating_score", 0.0)
+        else:
+            rating_score = round(min(1.0, max(-1.0, float(change_pct) / 3.0)), 2)
+            signal = calculate_signal(rating_score)
+
+        rsi_val = values.get("rsi") or (sent.get("rsi") if sent else None)
+
         normalized_quote = {
             "ticker": ticker,
             "tv_symbol": tv_symbol,
@@ -507,6 +534,9 @@ class TradingViewWebSocketProvider(DataProvider):
             "low": round(float(low_price), 2),
             "open": round(float(open_price), 2),
             "volume": int(volume),
+            "signal": signal,
+            "rating_score": rating_score,
+            "rsi": rsi_val,
             "updated_at": now_cairo.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
